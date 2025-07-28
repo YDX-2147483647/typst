@@ -59,5 +59,8 @@ mise trust
 mise install
 mise run generate
 
+# For debugging:
+cp assets/docs.json website/dist/
+
 # For dev: Run `mise run dev`
 # For deploy: Upload website/dist
