@@ -415,7 +415,7 @@ struct PluginInstance {
 /// A snapshot of a plugin instance.
 struct Snapshot {
     /// The number of pages in the main memory.
-    mem_pages: u32,
+    mem_pages: u64,
     /// The data in the main memory.
     mem_data: Vec<u8>,
 }
