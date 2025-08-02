@@ -9,11 +9,11 @@ curl https://mise.run | sh
 # 2. Clone typst-jp.github.io
 
 # Tested against https://github.com/typst-jp/typst-jp.github.io/commit/f588f0d53dbb39225739fa7faeecb33d9b4b055b
-git clone --depth 1 --no-checkout --filter=tree:0 https://github.com/typst-jp/typst-jp.github.io ../jp
+git clone --depth 1 --no-checkout --filter=tree:0 --branch=nested https://github.com/YDX-2147483647/typst-jp.github.io ../jp
 cd ../jp
 git sparse-checkout init
 git sparse-checkout set website/ tsconfig.json package.json bun.lockb .mise.toml
-git switch main
+git switch nested
 cd -
 
 # 3. Move files from typst-jp
