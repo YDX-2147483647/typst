@@ -53,6 +53,12 @@ sd --fixed-strings \
     'const publicAssetsDocsPath = resolve(__dirname, "./public/docs/assets/");' \
     website/vite.config.ts
 
+# Replace the typst version with the commit hash
+sd --fixed-strings \
+    '"version": "0.13.1"' \
+    "\"version\": \"dev.$(git rev-parse --short HEAD)\"" \
+    website/package.json
+
 # 4. Build
 
 mise trust
