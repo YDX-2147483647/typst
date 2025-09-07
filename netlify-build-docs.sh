@@ -58,6 +58,12 @@ sd --fixed-strings \
     'export { translation, Translation } from "./en-US";' \
     website/src/translation/index.tsx
 
+# Disable translation
+sd --fixed-strings \
+    'export const displayTranslationStatus: boolean = true;' \
+    'export const displayTranslationStatus: boolean = false;' \
+    website/src/metadata.ts
+
 # Replace the typst version with the commit hash
 sd --fixed-strings \
     '"version": "0.13.1"' \
