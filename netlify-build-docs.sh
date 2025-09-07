@@ -54,8 +54,8 @@ sd --fixed-strings \
 
 # Switch to English
 sd --fixed-strings \
-    'export { translation, Translation } from "./ja-JP";' \
-    'export { translation, Translation } from "./en-US";' \
+    'export { Translation, translation } from "./ja-JP";' \
+    'export { Translation, translation } from "./en-US";' \
     website/src/translation/index.tsx
 
 # Disable translation
