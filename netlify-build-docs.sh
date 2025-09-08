@@ -8,11 +8,11 @@ curl https://mise.run | sh
 
 # 2. Clone typst-jp/docs
 
-# Tested against https://github.com/typst-jp/docs/commit/529c33dec006b20729795ca64e3079e18ae4e1d9
+# Tested against https://github.com/typst-jp/docs/commit/e3e97eb0b296b31dd93e4761f3a8cc35719a3144
 git clone --depth 1 --no-checkout --filter=tree:0 https://github.com/typst-jp/docs ../jp
 cd ../jp
 git sparse-checkout init
-git sparse-checkout set website/ tsconfig.json package.json bun.lockb .mise.toml
+git sparse-checkout set website/ tsconfig.json package.json bun.lockb mise.toml
 git switch main
 cd -
 
@@ -24,7 +24,7 @@ cat << EOF >> .gitignore
 /tsconfig.json
 /package.json
 /bun.lockb
-/.mise.toml
+/mise.toml
 
 # Generated
 /assets/
@@ -34,41 +34,37 @@ EOF
 # This `cp -r` cannot be replaced with `ln -s`, because there will be a symlink created in website/public
 cp -r ../jp/website/ .
 ln -s ../jp/{tsconfig.json,package.json,bun.lockb} .
-cp ../jp/.mise.toml .
+cp ../jp/mise.toml .
 
 # The rust edition has been bumped to 2024 in https://github.com/typst/typst/pull/6637
 sd --fixed-strings \
     'rust = "1.83.0"' \
     'rust = "1.89.0"' \
-    .mise.toml
+    mise.toml
 
 # Change the base
 sd --fixed-strings \
-    'run = "cargo run --package typst-docs -- --assets-dir assets --out-file docs.json --base /docs/"' \
-    'run = "cargo run --package typst-docs -- --assets-dir assets --out-file docs.json --base /"' \
-    .mise.toml
-sd --fixed-strings \
-    'export const basePath: "/" | `/${string}/` = "/docs/";' \
-    'export const basePath: "/" | `/${string}/` = "/";' \
-    website/src/metadata.ts
+    '"basePath": "/docs/"' \
+    '"basePath": "/"' \
+    website/metadata.json
 
 # Switch to English
 sd --fixed-strings \
-    'export { Translation, translation } from "./ja-JP";' \
-    'export { Translation, translation } from "./en-US";' \
-    website/src/translation/index.tsx
+    '"language": "ja-JP"' \
+    '"language": "en-US"' \
+    website/metadata.json
 
 # Disable translation
 sd --fixed-strings \
-    'export const displayTranslationStatus: boolean = true;' \
-    'export const displayTranslationStatus: boolean = false;' \
-    website/src/metadata.ts
+    '"displayTranslationStatus": true' \
+    '"displayTranslationStatus": false' \
+    website/metadata.json
 
-# Replace the typst version with the commit hash
+# Replace the typst version with the commit date
 sd --fixed-strings \
     '"version": "0.13.1"' \
-    "\"version\": \"dev.$(git log -1 --format=%cs)\"" \
-    website/package.json
+    "\"version\": \"0.dev.$(git log -1 --format=%cs)\"" \
+    website/metadata.json
 
 # 4. Build
 
