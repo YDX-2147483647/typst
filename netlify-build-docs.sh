@@ -6,71 +6,53 @@ set -euxo pipefail
 curl -sS https://webi.sh/sd | sh && source ~/.config/envman/PATH.env
 curl https://mise.run | sh
 
-# 2. Clone typst-jp/docs
+# 2. Clone typst-docs-web
 
-# Tested against https://github.com/typst-jp/docs/commit/e3e97eb0b296b31dd93e4761f3a8cc35719a3144
-git clone --depth 1 --no-checkout --filter=tree:0 https://github.com/typst-jp/docs ../jp
-cd ../jp
-git sparse-checkout init
-git sparse-checkout set website/ tsconfig.json package.json bun.lockb mise.toml
-git switch main
-cd -
+# Tested against https://github.com/typst-community/typst-docs-web/commit/ddbabe054cdd570cb4c6769b4e4df3017c3b83af
+git clone --depth 1 https://github.com/typst-community/typst-docs-web docs-web
 
-# 3. Move files from typst-jp/docs
+# 3. Prepare files
 
 cat << EOF >> .gitignore
-# From typst-jp/docs
-/website/
-/tsconfig.json
-/package.json
-/bun.lockb
-/mise.toml
-
 # Generated
 /assets/
 /docs.json
 EOF
 
-# This `cp -r` cannot be replaced with `ln -s`, because there will be a symlink created in website/public
-cp -r ../jp/website/ .
-ln -s ../jp/{tsconfig.json,package.json,bun.lockb} .
-cp ../jp/mise.toml .
-
-# The rust edition has been bumped to 2024 in https://github.com/typst/typst/pull/6637
+# The rust edition has been bumped to 2024 in https://github.com/typst/typst/pull/6637, use the system default instead
 sd --fixed-strings \
     'rust = "1.83.0"' \
-    'rust = "1.89.0"' \
-    mise.toml
+    '' \
+    docs-web/mise.toml
 
-# Change the base
-sd --fixed-strings \
-    '"basePath": "/docs/"' \
-    '"basePath": "/"' \
-    website/metadata.json
+cat << EOF > docs-web/public/metadata.json
+{
+  "\$schema": "../metadata.schema.json",
+  "language": "en-US",
+  "version": "0.dev.$(git log -1 --format=%cs)",
+  "typstOfficialUrl": "https://typst.app",
+  "typstOfficialDocsUrl": "https://typst.app/docs/",
+  "githubOrganizationUrl": "https://github.com/typst-community",
+  "githubRepositoryUrl": "https://github.com/typst-community/typst-docs-web",
+  "discordServerUrl": "https://discord.gg/2uDybryKPe",
+  "originUrl": "https://ydx-typst.netlify.app/",
+  "basePath": "/",
+  "displayTranslationStatus": false
+}
+EOF
 
-# Switch to English
-sd --fixed-strings \
-    '"language": "ja-JP"' \
-    '"language": "en-US"' \
-    website/metadata.json
-
-# Disable translation
-sd --fixed-strings \
-    '"displayTranslationStatus": true' \
-    '"displayTranslationStatus": false' \
-    website/metadata.json
-
-# Replace the typst version with the commit date
-sd --fixed-strings \
-    '"version": "0.13.1"' \
-    "\"version\": \"0.dev.$(git log -1 --format=%cs)\"" \
-    website/metadata.json
+curl -L https://github.com/typst-community/org/raw/main/design/typst-community.icon.png \
+  -o docs-web/public/favicon.png
 
 # 4. Build
 
+cargo run --package typst-docs -- --assets-dir assets --out-file docs.json --base /
+
+cd docs-web
+ln -s ../../docs.json public/docs.json
+ln -s ../../assets public/assets
+
 mise trust
 mise install
-mise run generate
-
-# For dev: Run `mise run dev`
-# For deploy: Upload website/dist
+mise exec -- bun install
+mise exec -- bun run build
