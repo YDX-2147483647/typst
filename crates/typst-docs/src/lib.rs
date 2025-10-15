@@ -856,7 +856,7 @@ mod tests {
                   let path = Path::new("../../assets/docs").join(filename.clone());
                   let _ = pixmap.save_png(path).map_err(|_| "failed to write PNG file");
                   Html::new(format!(
-                      r#"<div class="previewed-code"><pre>{}</pre><div class="preview"><img src="/assets/docs/{}" alt="Preview" width="480" height="190"/></div></div>"#,
+                      r#"<div class="previewed-code"><pre>{}</pre><div class="preview"><img src="/docs/assets/{}" alt="Preview" width="480" height="190"/></div></div>"#,
                       source.as_str(), filename
                   ))
 

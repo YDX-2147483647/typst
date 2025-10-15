@@ -1,0 +1,13 @@
+{
+	"$schema": "../metadata.schema.json",
+	"language": "ja-JP",
+	"version": "0.10.0+后期随缘更新",
+	"typstOfficialUrl": "https://typst.app",
+	"typstOfficialDocsUrl": "https://typst.app/docs/",
+	"githubOrganizationUrl": "https://github.com/typst-doc-cn",
+	"githubRepositoryUrl": "https://github.com/typst-doc-cn/typst-doc-cn.github.io",
+	"discordServerUrl": "https://qm.qq.com/q/MQO6j6jCw2",
+	"originUrl": "https://typst-doc-cn.github.io/",
+	"basePath": "/docs/",
+	"displayTranslationStatus": false
+}
