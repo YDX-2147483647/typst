@@ -1,31 +1,91 @@
-# Based on ripgrep's release action:
-# https://github.com/BurntSushi/ripgrep/blob/master/.github/workflows/release.yml
-
 name: Deploy Documentation
 on:
   push:
     branches:
-      - main
-permissions:
-  contents: write
+      - cn-revamp
+  workflow_dispatch:
+
+# Allow only one concurrent deployment, skipping runs queued between the run in-progress and latest queued.
+# However, do NOT cancel in-progress runs as we want to allow these production deployments to complete.
+concurrency:
+  group: "pages"
+  cancel-in-progress: false
+
+env:
+  GITHUB_PAGES_BASE: "/${{ github.event.repository.name }}/"
+
 jobs:
-  build-and-deploy:
-    name: build-and-deploy
+  build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v5
+      - name: Checkout typst-docs-web
+        uses: actions/checkout@v5
+        with:
+          # https://github.com/typst-community/typst-docs-web/pull/21
+          repository: YDX-2147483647/typst-docs-web
+          ref: zh
+          path: docs-web
+
+      # Setup this repo
       - uses: dtolnay/rust-toolchain@1.79.0
       - uses: Swatinem/rust-cache@v2
-      # python3 and package jinja2
       - uses: actions/setup-python@v2
         with:
           python-version: 3.x
-      - run: python3 -m pip install jinja2 PyYAML
-      - run: cargo test --package typst-docs --lib -- tests::test_docs --exact --nocapture
-      - run: python3 ./gen.py
-      # deploy ./dist to https://github.com/typst-doc-cn/typst-doc-cn.github.io
-      - name: Deploy
-        uses: JamesIves/github-pages-deploy-action@v4
+      - run: python3 -m pip install PyYAML
+
+      # Setup typst-docs-web
+      - name: Setup tools managed by mise
+        uses: jdx/mise-action@13abe502c30c1559a5c37dff303831bab82c9402 # v2.2.3
         with:
-          folder: dist # The folder the action should deploy.
-          
+          working_directory: docs-web
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+        working-directory: docs-web
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: sd
+
+      - name: Create `assets/docs.json` and `assets/docs/*.png`
+        run: cargo test --package typst-docs --lib -- tests::test_docs --exact --nocapture
+      - name: Generate `assets/docs.zh.json`
+        run: python3 ./generate_docs_zh_json.py
+
+      - name: Put files for typst-docs-web
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          cd docs-web/public
+
+          ln -s ../../assets/docs.zh.json docs.json
+          ln -s ../../assets/docs assets
+          ln -s ../../metadata.json .
+
+          # Change base
+          sd '"/docs/' '"${{ env.GITHUB_PAGES_BASE }}' docs.json
+          sd '"basePath": "/docs/"' '"basePath": "${{ env.GITHUB_PAGES_BASE }}"' metadata.json
+
+          curl -L https://github.com/typst-community/org/raw/main/design/typst-community.icon.png \
+            -o favicon.png
+      - run: bun run build
+        working-directory: docs-web
+
+      - uses: actions/upload-pages-artifact@v4
+        with:
+          path: ./docs-web/dist/
+
+  deploy:
+    needs: build
+    permissions:
+      # Sets permissions of the GITHUB_TOKEN to allow deployment to GitHub Pages
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

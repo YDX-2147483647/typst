@@ -1,6 +1,6 @@
 {
 	"$schema": "../metadata.schema.json",
-	"language": "ja-JP",
+	"language": "zh-Hans",
 	"version": "0.10.0+后期随缘更新",
 	"typstOfficialUrl": "https://typst.app",
 	"typstOfficialDocsUrl": "https://typst.app/docs/",
