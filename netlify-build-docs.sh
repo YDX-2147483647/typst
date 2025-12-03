@@ -46,6 +46,7 @@ curl -L https://github.com/typst-community/org/raw/main/design/typst-community.i
 
 # 4. Build
 
+rustup default stable
 cargo run --package typst-docs -- --assets-dir assets --out-file docs.json --base /
 
 cd docs-web
