@@ -1,13 +1,18 @@
 {
-	"$schema": "../metadata.schema.json",
-	"language": "zh-Hans",
-	"version": "0.10.0+后期随缘更新",
-	"typstOfficialUrl": "https://typst.app",
-	"typstOfficialDocsUrl": "https://typst.app/docs/",
-	"githubOrganizationUrl": "https://github.com/typst-doc-cn",
-	"githubRepositoryUrl": "https://github.com/typst-doc-cn/typst-doc-cn.github.io",
-	"discordServerUrl": "https://qm.qq.com/q/MQO6j6jCw2",
-	"originUrl": "https://typst-doc-cn.github.io/",
-	"basePath": "/docs/",
-	"displayTranslationStatus": false
+  "$schema": "../metadata.schema.json",
+  "language": "zh-Hans",
+  "version": "0.10.0+后期随缘更新",
+  "typstOfficialUrl": "https://typst.app",
+  "typstOfficialDocsUrl": "https://typst.app/docs/",
+  "githubOrganizationUrl": "https://github.com/typst-doc-cn",
+  "socialLinks": [
+    { "url": "https://github.com/typst-doc-cn/typst-doc-cn.github.io" },
+    {
+      "url": "https://qm.qq.com/q/MQO6j6jCw2",
+      "title": "Typst 非官方中文交流群（QQ 793548390）"
+    }
+  ],
+  "originUrl": "https://typst-doc-cn.github.io/",
+  "basePath": "/docs/",
+  "displayTranslationStatus": false
 }
