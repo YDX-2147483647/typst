@@ -46,11 +46,15 @@ jobs:
       - uses: taiki-e/install-action@v2
         with:
           tool: sd
+      - name: Apply docs-web patches
+        working-directory: docs-web
+        run: |
+          git apply ../docs-web-scripts/0001-fix-use-Chinese-fonts.patch
 
       - name: Create `assets/docs.json` and `assets/docs/*.png`
         run: cargo test --package typst-docs --lib -- tests::test_docs --exact --nocapture
       - name: Generate `assets/docs.zh.json`
-        run: python3 ./generate_docs_zh_json.py
+        run: python3 ./docs-web-scripts/generate_docs_zh_json.py
 
       - name: Put files for typst-docs-web
         shell: bash
@@ -61,7 +65,7 @@ jobs:
 
           ln -s ../../assets/docs.zh.json docs.json
           ln -s ../../assets/docs assets
-          ln -s ../../metadata.json .
+          ln -s ../../docs-web-scripts/metadata.json .
 
           # Change base
           sd '"/docs/' '"${{ env.GITHUB_PAGES_BASE }}' docs.json
