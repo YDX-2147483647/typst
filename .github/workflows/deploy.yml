@@ -22,9 +22,7 @@ jobs:
       - name: Checkout typst-docs-web
         uses: actions/checkout@v5
         with:
-          # https://github.com/typst-community/typst-docs-web/pull/21
-          repository: YDX-2147483647/typst-docs-web
-          ref: zh
+          repository: typst-community/typst-docs-web
           path: docs-web
 
       # Setup this repo
