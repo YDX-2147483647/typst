@@ -8,7 +8,7 @@ curl https://mise.run | sh
 
 # 2. Clone typst-docs-web
 
-# Tested against https://github.com/typst-community/typst-docs-web/commit/ddbabe054cdd570cb4c6769b4e4df3017c3b83af
+# Tested against https://github.com/typst-community/typst-docs-web/commit/5367578e2aa099d3958fc075dc8d9060282930b6
 git clone --depth 1 https://github.com/typst-community/typst-docs-web docs-web
 
 # 3. Prepare files
@@ -33,8 +33,13 @@ cat << EOF > docs-web/public/metadata.json
   "typstOfficialUrl": "https://typst.app",
   "typstOfficialDocsUrl": "https://typst.app/docs/",
   "githubOrganizationUrl": "https://github.com/typst-community",
-  "githubRepositoryUrl": "https://github.com/typst-community/typst-docs-web",
-  "discordServerUrl": "https://discord.gg/2uDybryKPe",
+  "socialLinks": [
+    { "url": "https://github.com/typst-community/typst-docs-web" },
+    {
+      "title": "Discord (Typst)",
+      "url": "https://discord.gg/2uDybryKPe"
+    }
+  ],
   "originUrl": "https://ydx-typst.netlify.app/",
   "basePath": "/",
   "displayTranslationStatus": false
