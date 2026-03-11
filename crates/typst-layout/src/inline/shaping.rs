@@ -38,6 +38,14 @@ pub struct ShapedText<'a> {
     pub lang: Lang,
     /// The text region.
     pub region: Option<Region>,
+    /// The script inferred from the surrounding context.
+    ///
+    /// For a segment that consists entirely of generic-script characters (e.g.
+    /// punctuation), this holds the nearest specific script found by scanning
+    /// outward—first backward, then forward—through the surrounding text.  It
+    /// is used to tell HarfBuzz which script to apply so that OpenType features
+    /// such as `locl` work even in those generic-script segments.
+    pub prior_script: Script,
     /// The text's style properties.
     pub styles: StyleChain<'a>,
     /// The font variant.
@@ -420,6 +428,7 @@ impl<'a> ShapedText<'a> {
                 dir: self.dir,
                 lang: self.lang,
                 region: self.region,
+                prior_script: self.prior_script,
                 styles: self.styles,
                 variant: self.variant,
                 width: glyphs_width(glyphs),
@@ -434,6 +443,7 @@ impl<'a> ShapedText<'a> {
                 self.dir,
                 self.lang,
                 self.region,
+                self.prior_script,
             )
         }
     }
@@ -602,10 +612,28 @@ pub fn shape_range<'a>(
     let script = styles.get(TextElem::script);
     let lang = styles.get(TextElem::lang);
     let region = styles.get(TextElem::region);
-    let mut process = |range: Range, level: BidiLevel| {
+    let mut process = |range: Range, level: BidiLevel, segment_script: Script| {
         let dir = if level.is_ltr() { Dir::LTR } else { Dir::RTL };
+
+        // If all characters in the range have generic scripts (e.g. punctuation
+        // like "。"), scan outward—first backward then forward—to find the
+        // nearest specific script from context.  This lets HarfBuzz apply the
+        // right OpenType features (e.g. `locl`) even for those neutral runs.
+        // Scanning backward first gives priority to the preceding context,
+        // which matches the Unicode script-inheritance model (UAX #24).
+        let prior_script = std::iter::once(segment_script)
+            .chain(
+                text[..range.start]
+                    .chars()
+                    .rev()
+                    .chain(text[range.end..].chars())
+                    .map(|c| c.script()),
+            )
+            .find(|&sc| !is_generic_script(sc))
+            .unwrap_or(segment_script);
+
         let shaped =
-            shape(engine, range.start, &text[range.clone()], styles, dir, lang, region);
+            shape(engine, range.start, &text[range.clone()], styles, dir, lang, region, prior_script);
         items.push((range, Item::Text(shaped)));
     };
 
@@ -631,7 +659,7 @@ pub fn shape_range<'a>(
 
         if level != prev_level || !is_compatible(curr_script, prev_script) {
             if cursor < i {
-                process(cursor..i, prev_level);
+                process(cursor..i, prev_level, prev_script);
             }
             cursor = i;
             prev_level = level;
@@ -641,7 +669,7 @@ pub fn shape_range<'a>(
         }
     }
 
-    process(cursor..range.end, prev_level);
+    process(cursor..range.end, prev_level, prev_script);
 }
 
 /// Whether this is not a specific script.
@@ -654,6 +682,17 @@ fn is_compatible(a: Script, b: Script) -> bool {
     is_generic_script(a) || is_generic_script(b) || a == b
 }
 
+/// Convert a [`unicode_script::Script`] to a [`rustybuzz::Script`].
+///
+/// The two crates represent scripts with ISO 15924 four-letter tags.  Their
+/// only inconsistency is in the representation of Unknown: `unicode_script`
+/// uses an empty string while `rustybuzz` uses `"Zzzz"`.  For every other
+/// (non-generic) script the conversion is lossless.
+fn to_rustybuzz_script(script: Script) -> Option<rustybuzz::Script> {
+    let tag_bytes: [u8; 4] = script.short_name().as_bytes().try_into().ok()?;
+    rustybuzz::Script::from_iso15924_tag(Tag::from_bytes(&tag_bytes))
+}
+
 /// Shape text into [`ShapedText`].
 #[allow(clippy::too_many_arguments)]
 fn shape<'a>(
@@ -664,6 +703,7 @@ fn shape<'a>(
     dir: Dir,
     lang: Lang,
     region: Option<Region>,
+    prior_script: Script,
 ) -> ShapedText<'a> {
     let size = styles.resolve(TextElem::size);
     let shift_settings = styles.get(TextElem::shift_settings);
@@ -681,7 +721,7 @@ fn shape<'a>(
     };
 
     if !text.is_empty() {
-        shape_segment(&mut ctx, base, text, families(styles));
+        shape_segment(&mut ctx, base, text, families(styles), prior_script);
     }
 
     track_and_space(&mut ctx);
@@ -698,6 +738,7 @@ fn shape<'a>(
         dir,
         lang,
         region,
+        prior_script,
         styles,
         variant: ctx.variant,
         width: glyphs_width(&ctx.glyphs),
@@ -735,6 +776,7 @@ fn shape_segment<'a>(
     base: usize,
     text: &str,
     mut families: impl Iterator<Item = &'a FontFamily> + Clone,
+    prior_script: Script,
 ) {
     // Don't try shaping newlines, tabs, or default ignorables.
     if text
@@ -798,7 +840,26 @@ fn shape_segment<'a>(
     });
     buffer.guess_segment_properties();
 
-    // By default, Harfbuzz will create zero-width space glyphs for default
+    // The caller (`shape_range`) already segments text by script, so we know
+    // the appropriate script for this run.  Always override HarfBuzz's guess
+    // with the script inferred from context (`prior_script`), provided the user
+    // has not set an explicit script and `prior_script` is a concrete (non-
+    // generic) script.  This makes OpenType features such as `locl` work
+    // correctly even for runs of generic-script characters (e.g. punctuation)
+    // that would otherwise be shaped with an Unknown script.
+    //
+    // The prior art for this approach is Unicode Technical Standard #24
+    // (UAX #24), which specifies that characters with a Common or Inherited
+    // script take on the script of their surrounding context—the same principle
+    // is used in ICU's ScriptRun, Pango's script-run iterator, and Qt's text
+    // engine.
+    if ctx.styles.get(TextElem::script).is_auto() {
+        if let Some(rb_script) = to_rustybuzz_script(prior_script) {
+            buffer.set_script(rb_script);
+        }
+    }
+
+    // By default, HarfBuzz will create zero-width space glyphs for default
     // ignorables. This is probably useful for GUI apps that want noticeable
     // effects on the cursor for those, but for us it's not useful and hurts
     // text extraction.
@@ -955,7 +1016,7 @@ fn shape_segment<'a>(
             }
 
             // Recursively shape the tofu sequence with the next family.
-            shape_segment(ctx, base + start, &text[start..end], families.clone());
+            shape_segment(ctx, base + start, &text[start..end], families.clone(), prior_script);
         }
 
         i += 1;
