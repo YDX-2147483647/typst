@@ -28,7 +28,7 @@ use crate::visualize::{Color, Paint};
 /// Pages can be set to use `{auto}` as their width or height. In this case, the
 /// pages will grow to fit their content on the respective axis.
 ///
-/// The [Guide for Page Setup]($guides/page-setup-guide) explains how to use
+/// The [Guide for Page Setup]($guides/page-setup) explains how to use
 /// this and related functions to set up a document with many examples.
 ///
 /// # Example
@@ -38,6 +38,19 @@ use crate::visualize::{Color, Paint};
 ///
 /// There you go, US friends!
 /// ```
+///
+/// # Accessibility
+/// The contents of the page's header, footer, foreground, and background are
+/// invisible to Assistive Technology (AT) like screen readers. Only the body of
+/// the page is read by AT. Do not include vital information not included
+/// elsewhere in the document in these areas.
+///
+/// # Styling
+/// Note that the [`page`] element cannot be targeted by show rules; writing
+/// `{show page: ..}` has no effect. To repeat content on every page, you can
+/// instead configure the [`header`]($page.header), [`footer`]($page.footer),
+/// [`background`]($page.background), and [`foreground`]($page.foreground)
+/// properties with a set rule.
 #[elem(Construct)]
 pub struct PageElem {
     /// A standard paper size to set width and height.
@@ -109,7 +122,7 @@ pub struct PageElem {
     /// The page's margins.
     ///
     /// - `{auto}`: The margins are set automatically to 2.5/21 times the smaller
-    ///   dimension of the page. This results in 2.5cm margins for an A4 page.
+    ///   dimension of the page. This results in 2.5 cm margins for an A4 page.
     /// - A single length: The same margin on all sides.
     /// - A dictionary: With a dictionary, the margins can be set individually.
     ///   The dictionary can contain the following keys in order of precedence:
@@ -126,8 +139,10 @@ pub struct PageElem {
     ///   - `rest`: The margins on all sides except those for which the
     ///     dictionary explicitly sets a size.
     ///
-    /// The values for `left` and `right` are mutually exclusive with
-    /// the values for `inside` and `outside`.
+    /// All keys are optional; omitted keys will use their previously set value,
+    /// or the default margin if never set. In addition, the values for `left`
+    /// and `right` are mutually exclusive with the values for `inside` and
+    /// `outside`.
     ///
     /// ```example
     /// #set page(
@@ -202,10 +217,26 @@ pub struct PageElem {
     #[ghost]
     pub fill: Smart<Option<Paint>>,
 
-    /// How to [number]($numbering) the pages.
+    /// How to number the pages. You can refer to the Page Setup Guide for
+    /// [customizing page numbers]($guides/page-setup/#page-numbers).
     ///
-    /// If an explicit `footer` (or `header` for top-aligned numbering) is
-    /// given, the numbering is ignored.
+    /// Accepts a [numbering pattern or function]($numbering) taking one or two
+    /// numbers:
+    /// 1. The first number is the current page number.
+    /// 2. The second number is the total number of pages. In a numbering
+    ///    pattern, the second number can be omitted. If a function is passed,
+    ///    it will receive one argument in the context of links or references,
+    ///    and two arguments when producing the visible page numbers.
+    ///
+    /// These are logical numbers controlled by the page counter, and may thus
+    /// not match the physical numbers. Specifically, they are the
+    /// [current]($counter.get) and the [final]($counter.final) value of
+    /// `{counter(page)}`. See the [`counter`]($counter/#page-counter)
+    /// documentation for more details.
+    ///
+    /// If an explicit [`footer`]($page.footer) (or [`header`]($page.header) for
+    /// [top-aligned]($page.number-align) numbering) is given, the numbering is
+    /// ignored.
     ///
     /// ```example
     /// #set page(
@@ -255,8 +286,8 @@ pub struct PageElem {
     /// The page's header. Fills the top margin of each page.
     ///
     /// - Content: Shows the content as the header.
-    /// - `{auto}`: Shows the page number if a `numbering` is set and
-    ///   `number-align` is `top`.
+    /// - `{auto}`: Shows the page number if a [`numbering`]($page.numbering) is
+    ///   set and [`number-align`]($page.number-align) is `top`.
     /// - `{none}`: Suppresses the header.
     ///
     /// ```example
@@ -275,7 +306,8 @@ pub struct PageElem {
     #[ghost]
     pub header: Smart<Option<Content>>,
 
-    /// The amount the header is raised into the top margin.
+    /// The amount the header is raised into the top margin. Ratios are relative
+    /// to the height of the top margin.
     #[default(Ratio::new(0.3).into())]
     #[ghost]
     pub header_ascent: Rel<Length>,
@@ -283,8 +315,8 @@ pub struct PageElem {
     /// The page's footer. Fills the bottom margin of each page.
     ///
     /// - Content: Shows the content as the footer.
-    /// - `{auto}`: Shows the page number if a `numbering` is set and
-    ///   `number-align` is `bottom`.
+    /// - `{auto}`: Shows the page number if a [`numbering`]($page.numbering) is
+    ///   set and [`number-align`]($page.number-align) is `bottom`.
     /// - `{none}`: Suppresses the footer.
     ///
     /// For just a page number, the `numbering` property typically suffices. If
@@ -311,7 +343,48 @@ pub struct PageElem {
     #[ghost]
     pub footer: Smart<Option<Content>>,
 
-    /// The amount the footer is lowered into the bottom margin.
+    /// The amount the footer is lowered into the bottom margin. Ratios are
+    /// relative to the height of the bottom margin.
+    ///
+    /// ```preview
+    /// #set page(
+    ///   height: 126pt,
+    ///   width: 240pt,
+    ///   margin: (top: 0pt, x: 20pt, bottom: 50pt),
+    ///   numbering: (..nums) => box(
+    ///     outset: (x: 50%),
+    ///     fill: orange.lighten(50%),
+    ///   )[6 / 8],
+    ///   footer-descent: 47%,
+    ///   foreground: place(bottom, {
+    ///     let arrow(height) = math.stretch(
+    ///       text(1.4em, sym.arrow.t.b),
+    ///       size: height,
+    ///     )
+    ///     set text(
+    ///       1.2em,
+    ///       purple.darken(10%),
+    ///       bottom-edge: "bounds",
+    ///       top-edge: "bounds",
+    ///     )
+    ///     set par(leading: 0.5em)
+    ///     import grid: cell
+    ///     context grid(
+    ///       align: center + horizon,
+    ///       columns: (37%, 10%, 6%, 47%),
+    ///       cell(rowspan: 2, align: right)[bottom\ margin],
+    ///       cell(rowspan: 2, align: left, arrow(page.margin.bottom)),
+    ///       arrow(page.margin.bottom * page.footer-descent.ratio),
+    ///       cell(align: left)[footer descent],
+    ///     )
+    ///   }),
+    /// )
+    /// #block(width: 100%, height: 100%, fill: green.lighten(75%), {
+    ///   set par(justify: true)
+    ///   set text(luma(25%))
+    ///   place(bottom, lorem(42))
+    /// })
+    /// ```
     #[default(Ratio::new(0.3).into())]
     #[ghost]
     pub footer_descent: Rel<Length>,
@@ -363,7 +436,8 @@ impl Construct for PageElem {
     fn construct(engine: &mut Engine, args: &mut Args) -> SourceResult<Content> {
         // The page constructor is special: It doesn't create a page element.
         // Instead, it just ensures that the passed content lives in a separate
-        // page and styles it.
+        // page and styles it. Because no element node is produced, `show`
+        // rules can't match `page`; use `set` rules instead.
         let styles = Self::set(engine, args)?;
         let body = args.expect::<Content>("body")?;
         Ok(Content::sequence([
@@ -405,7 +479,7 @@ impl LocalName for PageElem {
 ///
 /// Pagination tries to avoid single lines of text at the top or bottom of a
 /// page (these are called _widows_ and _orphans_). You can adjust the
-/// [`text.costs`]($text.costs) parameter to disable this behavior.
+/// [`text.costs`] parameter to disable this behavior.
 #[elem(title = "Page Break")]
 pub struct PagebreakElem {
     /// If `{true}`, the page break is skipped if the current page is already
@@ -462,7 +536,7 @@ pub struct PagedDocument {
 }
 
 /// A finished page.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Hash)]
 pub struct Page {
     /// The frame that defines the page.
     pub frame: Frame,
@@ -895,7 +969,7 @@ papers! {
     (US_LETTER:         215.9,  279.4, "us-letter")
     (US_LEGAL:          215.9,  355.6, "us-legal")
     (US_TABLOID:        279.4,  431.8, "us-tabloid")
-    (US_EXECUTIVE:      84.15,  266.7, "us-executive")
+    (US_EXECUTIVE:      184.15, 266.7, "us-executive")
     (US_FOOLSCAP_FOLIO: 215.9,  342.9, "us-foolscap-folio")
     (US_STATEMENT:      139.7,  215.9, "us-statement")
     (US_LEDGER:         431.8,  279.4, "us-ledger")

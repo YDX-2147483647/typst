@@ -6,7 +6,7 @@ use std::ops::{Add, AddAssign, Deref, Range};
 use comemo::Tracked;
 use ecow::EcoString;
 use serde::{Deserialize, Serialize};
-use typst_syntax::{Span, Spanned};
+use typst_syntax::Spanned;
 use unicode_normalization::UnicodeNormalization;
 use unicode_segmentation::UnicodeSegmentation;
 
@@ -42,14 +42,15 @@ pub use crate::__format_str as format_str;
 /// [joined together]($scripting/#blocks) and multiplied with integers.
 ///
 /// Typst provides utility methods for string manipulation. Many of these
-/// methods (e.g., `split`, `trim` and `replace`) operate on _patterns:_ A
-/// pattern can be either a string or a [regular expression]($regex). This makes
-/// the methods quite versatile.
+/// methods (e.g., [`split`]($str.split), [`trim`]($str.trim) and
+/// [`replace`]($str.replace)) operate on _patterns:_ A pattern can be either a
+/// string or a [regular expression]($regex). This makes the methods quite
+/// versatile.
 ///
 /// All lengths and indices are expressed in terms of UTF-8 bytes. Indices are
 /// zero-based and negative indices wrap around to the end of the string.
 ///
-/// You can convert a value to a string with this type's constructor.
+/// You can convert a value to a string with the `str` constructor.
 ///
 /// # Example
 /// ```example
@@ -57,8 +58,8 @@ pub use crate::__format_str as format_str;
 /// #"\"hello\n  world\"!" \
 /// #"1 2 3".split() \
 /// #"1,2;3".split(regex("[,;]")) \
-/// #(regex("\d+") in "ten euros") \
-/// #(regex("\d+") in "10 euros")
+/// #(regex("\\d+") in "ten euros") \
+/// #(regex("\\d+") in "10 euros")
 /// ```
 ///
 /// # Escape sequences { #escapes }
@@ -153,21 +154,28 @@ impl Str {
         value: ToStr,
         /// The base (radix) to display integers in, between 2 and 36.
         #[named]
-        #[default(Spanned::new(10, Span::detached()))]
-        base: Spanned<i64>,
+        #[default(Spanned::detached(Base::Default))]
+        base: Spanned<Base>,
     ) -> SourceResult<Str> {
         Ok(match value {
             ToStr::Str(s) => {
-                if base.v != 10 {
+                if matches!(base.v, Base::User(_)) {
                     bail!(base.span, "base is only supported for integers");
                 }
                 s
             }
             ToStr::Int(n) => {
-                if base.v < 2 || base.v > 36 {
+                let b = base.v.value();
+                if b == 1 && n > 0 {
+                    bail!(
+                        base.span, "base must be between 2 and 36";
+                        hint: "generate a unary representation with `\"1\" * {n}`";
+                    );
+                }
+                if b < 2 || b > 36 {
                     bail!(base.span, "base must be between 2 and 36");
                 }
-                repr::format_int_with_base(n, base.v).into()
+                repr::format_int_with_base(n, b).into()
             }
         })
     }
@@ -253,9 +261,12 @@ impl Str {
         #[named]
         count: Option<i64>,
     ) -> StrResult<Str> {
-        let end = end.or(count.map(|c| start + c)).unwrap_or(self.len() as i64);
+        if end.is_some() && count.is_some() {
+            bail!("`end` and `count` are mutually exclusive");
+        }
         let start = self.locate(start)?;
-        let end = self.locate(end)?.max(start);
+        let end = end.or(count.map(|c| start as i64 + c));
+        let end = self.locate(end.unwrap_or(self.len() as i64))?.max(start);
         Ok(self.0[start..end].into())
     }
 
@@ -422,6 +433,17 @@ impl Str {
     ///   group. The first item of the array contains the first matched
     ///   capturing, not the whole match! This is empty unless the `pattern` was
     ///   a regex with capturing groups.
+    ///
+    /// ```example:"Shape of the returned dictionary"
+    /// #let pat = regex("not (a|an) (apple|cat)")
+    /// #"I'm a doctor, not an apple.".match(pat) \
+    /// #"I am not a cat!".match(pat)
+    /// ```
+    ///
+    /// ```example:"Different kinds of patterns"
+    /// #assert.eq("Is there a".match("for this?"), none)
+    /// #"The time of my life.".match(regex("[mit]+e"))
+    /// ```
     #[func]
     pub fn match_(
         &self,
@@ -438,7 +460,11 @@ impl Str {
 
     /// Searches for the specified pattern in the string and returns an array of
     /// dictionaries with details about all matches. For details about the
-    /// returned dictionaries, see above.
+    /// returned dictionaries, see [above]($str.match).
+    ///
+    /// ```example
+    /// #"Day by Day.".matches("Day")
+    /// ```
     #[func]
     pub fn matches(
         &self,
@@ -473,8 +499,12 @@ impl Str {
         /// The string to replace the matches with or a function that gets a
         /// dictionary for each match and can return individual replacement
         /// strings.
+        ///
+        /// The dictionary passed to the function has the same shape as the
+        /// dictionary returned by [`match`]($str.match).
         replacement: Replacement,
-        ///  If given, only the first `count` matches of the pattern are placed.
+        ///  If given, only the first `count` matches of the pattern are
+        ///  replaced.
         #[named]
         count: Option<usize>,
     ) -> SourceResult<Str> {
@@ -823,10 +853,33 @@ cast! {
     v: f64 => Self::Str(repr::display_float(v).into()),
     v: Decimal => Self::Str(format_str!("{}", v)),
     v: Version => Self::Str(format_str!("{}", v)),
-    v: Bytes => Self::Str(v.to_str().map_err(|_| "bytes are not valid utf-8")?),
+    v: Bytes => Self::Str(v.to_str().map_err(|_| "bytes are not valid UTF-8")?),
     v: Label => Self::Str(v.resolve().as_str().into()),
     v: Type => Self::Str(v.long_name().into()),
     v: Str => Self::Str(v),
+}
+
+/// Similar to `Option<i64>`, but the default value casts to `10` rather than
+/// `none`, so that the right default value is documented.
+#[derive(Debug, Copy, Clone)]
+pub enum Base {
+    Default,
+    User(i64),
+}
+
+impl Base {
+    pub fn value(self) -> i64 {
+        match self {
+            Self::Default => 10,
+            Self::User(b) => b,
+        }
+    }
+}
+
+cast! {
+    Base,
+    self => self.value().into_value(),
+    v: i64 => Self::User(v),
 }
 
 /// A Unicode normalization form.
@@ -903,7 +956,7 @@ fn string_is_empty() -> EcoString {
 /// A regular expression.
 ///
 /// Can be used as a [show rule selector]($styling/#show-rules) and with
-/// [string methods]($str) like `find`, `split`, and `replace`.
+/// [string methods]($str) like `find`, `split`, `replace`, and `match`.
 ///
 /// [See here](https://docs.rs/regex/latest/regex/#syntax) for a specification
 /// of the supported syntax.
@@ -914,7 +967,7 @@ fn string_is_empty() -> EcoString {
 /// #"a,b;c".split(regex("[,;]"))
 ///
 /// // Works with show rules.
-/// #show regex("\d+"): set text(red)
+/// #show regex("\\d+"): set text(red)
 ///
 /// The numbers 1 to 10.
 /// ```
@@ -936,14 +989,18 @@ impl Regex {
     pub fn construct(
         /// The regular expression as a string.
         ///
-        /// Most regex escape sequences just work because they are not valid Typst
-        /// escape sequences. To produce regex escape sequences that are also valid in
-        /// Typst (e.g. `[\\]`), you need to escape twice. Thus, to match a verbatim
-        /// backslash, you would need to write `{regex("\\\\")}`.
+        /// Both Typst strings and regular expressions use backslashes for
+        /// escaping. To produce a regex escape sequence that is also valid in
+        /// Typst, you need to escape the backslash itself (e.g., writing
+        /// `{regex("\\\\")}` for the regex `\\`). Regex escape sequences that
+        /// are not valid Typst escape sequences (e.g., `\d` and `\b`) can be
+        /// entered into strings directly, but it's good practice to still
+        /// escape them to avoid ambiguity (i.e., `{regex("\\b\\d")}`). See the
+        /// [list of valid string escape sequences]($str/#escapes).
         ///
         /// If you need many escape sequences, you can also create a raw element
         /// and extract its text to use it for your regular expressions:
-        /// ```{regex(`\d+\.\d+\.\d+`.text)}```.
+        /// ``{regex(`\d+\.\d+\.\d+`.text)}``.
         regex: Spanned<Str>,
     ) -> SourceResult<Regex> {
         Self::new(&regex.v).at(regex.span)

@@ -13,13 +13,15 @@ use crate::foundations::{
     Resolve, ShowSet, Smart, StyleChain, Styles, cast, elem, func, scope, select_where,
 };
 use crate::introspection::{
-    Counter, CounterKey, Introspector, Locatable, Location, Locator, LocatorLink,
+    Counter, CounterKey, Locatable, Location, Locator, LocatorLink,
+    PageNumberingIntrospection, QueryIntrospection, Tagged, Unqueriable,
 };
 use crate::layout::{
     Abs, Axes, BlockBody, BlockElem, BoxElem, Dir, Em, Fr, HElem, Length, Region, Rel,
     RepeatElem, Sides,
 };
 use crate::model::{HeadingElem, NumberingPattern, ParElem, Refable};
+use crate::pdf::PdfMarkerTag;
 use crate::text::{LocalName, SpaceElem, TextElem};
 
 /// A table of contents, figures, or other elements.
@@ -145,7 +147,7 @@ use crate::text::{LocalName, SpaceElem, TextElem};
 ///
 /// [^1]: The outline of equations is the exception to this rule as it does not
 ///       have a body and thus does not use indented layout.
-#[elem(scope, keywords = ["Table of Contents", "toc"], ShowSet, LocalName, Locatable)]
+#[elem(scope, keywords = ["Table of Contents", "toc"], ShowSet, LocalName, Locatable, Tagged)]
 pub struct OutlineElem {
     /// The title of the outline.
     ///
@@ -247,6 +249,151 @@ impl OutlineElem {
     type OutlineEntry;
 }
 
+impl Packed<OutlineElem> {
+    /// Produces the heading for the outline, if any.
+    pub fn realize_title(&self, styles: StyleChain) -> Option<Content> {
+        let span = self.span();
+        self.title
+            .get_cloned(styles)
+            .unwrap_or_else(|| {
+                Some(
+                    TextElem::packed(Packed::<OutlineElem>::local_name_in(styles))
+                        .spanned(span),
+                )
+            })
+            .map(|title| {
+                HeadingElem::new(title)
+                    .with_depth(NonZeroUsize::ONE)
+                    .pack()
+                    .spanned(span)
+            })
+    }
+
+    /// Realizes the entries in a flat fashion.
+    pub fn realize_flat(
+        &self,
+        engine: &mut Engine,
+        styles: StyleChain,
+    ) -> SourceResult<Vec<Packed<OutlineEntry>>> {
+        let mut entries = vec![];
+        for result in self.realize_iter(engine, styles) {
+            let (entry, _, included) = result?;
+            if included {
+                entries.push(entry);
+            }
+        }
+        Ok(entries)
+    }
+
+    /// Realizes the entries in a tree fashion.
+    pub fn realize_tree(
+        &self,
+        engine: &mut Engine,
+        styles: StyleChain,
+    ) -> SourceResult<Vec<OutlineNode>> {
+        let flat = self.realize_iter(engine, styles).collect::<SourceResult<Vec<_>>>()?;
+        Ok(OutlineNode::build_tree(flat))
+    }
+
+    /// Realizes the entries as a lazy iterator.
+    fn realize_iter(
+        &self,
+        engine: &mut Engine,
+        styles: StyleChain,
+    ) -> impl Iterator<Item = SourceResult<(Packed<OutlineEntry>, NonZeroUsize, bool)>>
+    {
+        let span = self.span();
+        let elems =
+            engine.introspect(QueryIntrospection(self.target.get_cloned(styles).0, span));
+        let depth = self.depth.get(styles).unwrap_or(NonZeroUsize::MAX);
+        elems.into_iter().map(move |elem| {
+            let Some(outlinable) = elem.with::<dyn Outlinable>() else {
+                bail!(self.span(), "cannot outline {}", elem.func().name());
+            };
+            let level = outlinable.level();
+            let include = outlinable.outlined() && level <= depth;
+            let entry = Packed::new(OutlineEntry::new(level, elem)).spanned(span);
+            Ok((entry, level, include))
+        })
+    }
+}
+
+/// A node in a tree of outline entry.
+#[derive(Debug)]
+pub struct OutlineNode<T = Packed<OutlineEntry>> {
+    /// The entry itself.
+    pub entry: T,
+    /// The entry's level.
+    pub level: NonZeroUsize,
+    /// Its descendants.
+    pub children: Vec<OutlineNode<T>>,
+}
+
+impl<T> OutlineNode<T> {
+    /// Turns a flat list of entries into a tree.
+    ///
+    /// Each entry in the iterator should be accompanied by
+    /// - a level
+    /// - a boolean indicating whether it is included (`true`) or skipped (`false`)
+    pub fn build_tree(
+        flat: impl IntoIterator<Item = (T, NonZeroUsize, bool)>,
+    ) -> Vec<Self> {
+        // Stores the level of the topmost skipped ancestor of the next included
+        // heading.
+        let mut last_skipped_level = None;
+        let mut tree: Vec<OutlineNode<T>> = vec![];
+
+        for (entry, level, include) in flat {
+            if include {
+                let mut children = &mut tree;
+
+                // Descend the tree through the latest included heading of each
+                // level until either:
+                // - reaching a node whose children would be siblings of this
+                //   heading (=> add the current heading as a child of this
+                //   node)
+                // - reaching a node with no children (=> this heading probably
+                //   skipped a few nesting levels in Typst, or one or more
+                //   ancestors of this heading weren't included, so add it as a
+                //   child of this node, which is its deepest included ancestor)
+                // - or, if the latest heading(s) was(/were) skipped, then stop
+                //   if reaching a node whose children would be siblings of the
+                //   latest skipped heading of lowest level (=> those skipped
+                //   headings would be ancestors of the current heading, so add
+                //   it as a sibling of the least deep skipped ancestor among
+                //   them, as those ancestors weren't added to the tree, and the
+                //   current heading should not be mistakenly added as a
+                //   descendant of a siblibg of that ancestor.)
+                //
+                // That is, if you had an included heading of level N, a skipped
+                // heading of level N, a skipped heading of level N + 1, and
+                // then an included heading of level N + 2, that last one is
+                // included as a level N heading (taking the place of its
+                // topmost skipped ancestor), so that it is not mistakenly added
+                // as a descendant of the previous level N heading.
+                while children.last().is_some_and(|last| {
+                    last_skipped_level.is_none_or(|l| last.level < l)
+                        && last.level < level
+                }) {
+                    children = &mut children.last_mut().unwrap().children;
+                }
+
+                // Since this heading was bookmarked, the next heading (if it is
+                // a child of this one) won't have a skipped direct ancestor.
+                last_skipped_level = None;
+                children.push(OutlineNode { entry, level, children: vec![] });
+            } else if last_skipped_level.is_none_or(|l| level < l) {
+                // Only the topmost / lowest-level skipped heading matters when
+                // we have consecutive skipped headings, hence the condition
+                // above.
+                last_skipped_level = Some(level);
+            }
+        }
+
+        tree
+    }
+}
+
 impl ShowSet for Packed<OutlineElem> {
     fn show_set(&self, styles: StyleChain) -> Styles {
         let mut out = Styles::new();
@@ -323,7 +470,7 @@ pub trait Outlinable: Refable {
 /// With show-set and show rules on outline entries, you can richly customize
 /// the outline's appearance. See the
 /// [section on styling the outline]($outline/#styling-the-outline) for details.
-#[elem(scope, name = "entry", title = "Outline Entry")]
+#[elem(scope, name = "entry", title = "Outline Entry", Locatable, Tagged)]
 pub struct OutlineEntry {
     /// The nesting level of this outline entry. Starts at `{1}` for top-level
     /// entries.
@@ -382,7 +529,7 @@ impl OutlineEntry {
     /// If the outline's indent is a fixed value or a function, the prefixes are
     /// indented, but the inner contents are simply offset from the prefix by
     /// the specified `gap`, rather than aligning outline-wide. For a visual
-    /// explanation, see [`outline.indent`]($outline.indent).
+    /// explanation, see [`outline.indent`].
     #[func(contextual)]
     pub fn indented(
         &self,
@@ -415,18 +562,19 @@ impl OutlineEntry {
 
         let prefix_width = prefix
             .as_ref()
-            .map(|prefix| measure_prefix(engine, prefix, outline_loc, styles))
+            .map(|prefix| measure_prefix(engine, prefix, outline_loc, styles, span))
             .transpose()?;
         let prefix_inset = prefix_width.map(|w| w + gap.resolve(styles));
 
         let indent = outline.indent.get_ref(styles);
         let (base_indent, hanging_indent) = match &indent {
             Smart::Auto => compute_auto_indents(
-                engine.introspector,
+                engine,
                 outline_loc,
                 styles,
                 self.level,
                 prefix_inset,
+                span,
             ),
             Smart::Custom(amount) => {
                 let base = amount.resolve(engine, context, self.level, span)?;
@@ -453,7 +601,7 @@ impl OutlineEntry {
             // ahead so that the inner contents are aligned.
             seq.extend([
                 HElem::new((-hanging_indent).into()).pack(),
-                prefix,
+                PdfMarkerTag::Label(prefix),
                 HElem::new((hanging_indent - prefix_width).into()).pack(),
                 inner,
             ]);
@@ -490,8 +638,9 @@ impl OutlineEntry {
         let Some(numbering) = outlinable.numbering() else { return Ok(None) };
         let loc = self.element_location().at(span)?;
         let styles = context.styles().at(span)?;
-        let numbers =
-            outlinable.counter().display_at_loc(engine, loc, styles, numbering)?;
+        let numbers = outlinable
+            .counter()
+            .display_at(engine, loc, styles, numbering, span)?;
         Ok(Some(outlinable.prefix(numbers)))
     }
 
@@ -504,6 +653,46 @@ impl OutlineEntry {
         engine: &mut Engine,
         context: Tracked<Context>,
         span: Span,
+    ) -> SourceResult<Content> {
+        let body = self.body().at(span)?;
+        let page = self.page(engine, context, span)?;
+        self.build_inner(context, span, body, page)
+    }
+
+    /// The content which is displayed in place of the referred element at its
+    /// entry in the outline. For a heading, this is its
+    /// [`body`]($heading.body); for a figure a caption and for equations, it is
+    /// empty.
+    #[func]
+    pub fn body(&self) -> StrResult<Content> {
+        Ok(self.outlinable()?.body())
+    }
+
+    /// The page number of this entry's element, formatted with the numbering
+    /// set for the referenced page.
+    #[func(contextual)]
+    pub fn page(
+        &self,
+        engine: &mut Engine,
+        context: Tracked<Context>,
+        span: Span,
+    ) -> SourceResult<Content> {
+        let loc = self.element_location().at(span)?;
+        let styles = context.styles().at(span)?;
+        let numbering = engine
+            .introspect(PageNumberingIntrospection(loc, span))
+            .unwrap_or_else(|| NumberingPattern::from_str("1").unwrap().into());
+        Counter::new(CounterKey::Page).display_at(engine, loc, styles, &numbering, span)
+    }
+}
+
+impl OutlineEntry {
+    pub fn build_inner(
+        &self,
+        context: Tracked<Context>,
+        span: Span,
+        body: Content,
+        page: Content,
     ) -> SourceResult<Content> {
         let styles = context.styles().at(span)?;
 
@@ -524,7 +713,7 @@ impl OutlineEntry {
             seq.push(TextElem::packed("\u{202B}"));
         }
 
-        seq.push(self.body().at(span)?);
+        seq.push(body);
 
         if rtl {
             // "Pop Directional Formatting"
@@ -549,41 +738,11 @@ impl OutlineEntry {
         // Add the page number. The word joiner in front ensures that the page
         // number doesn't stand alone in its line.
         seq.push(TextElem::packed("\u{2060}"));
-        seq.push(self.page(engine, context, span)?);
+        seq.push(page);
 
         Ok(Content::sequence(seq))
     }
 
-    /// The content which is displayed in place of the referred element at its
-    /// entry in the outline. For a heading, this is its
-    /// [`body`]($heading.body); for a figure a caption and for equations, it is
-    /// empty.
-    #[func]
-    pub fn body(&self) -> StrResult<Content> {
-        Ok(self.outlinable()?.body())
-    }
-
-    /// The page number of this entry's element, formatted with the numbering
-    /// set for the referenced page.
-    #[func(contextual)]
-    pub fn page(
-        &self,
-        engine: &mut Engine,
-        context: Tracked<Context>,
-        span: Span,
-    ) -> SourceResult<Content> {
-        let loc = self.element_location().at(span)?;
-        let styles = context.styles().at(span)?;
-        let numbering = engine
-            .introspector
-            .page_numbering(loc)
-            .cloned()
-            .unwrap_or_else(|| NumberingPattern::from_str("1").unwrap().into());
-        Counter::new(CounterKey::Page).display_at_loc(engine, loc, styles, &numbering)
-    }
-}
-
-impl OutlineEntry {
     fn outlinable(&self) -> StrResult<&dyn Outlinable> {
         self.element
             .with::<dyn Outlinable>()
@@ -594,10 +753,10 @@ impl OutlineEntry {
     pub fn element_location(&self) -> HintedStrResult<Location> {
         let elem = &self.element;
         elem.location().ok_or_else(|| {
-            if elem.can::<dyn Locatable>() && elem.can::<dyn Outlinable>() {
+            if elem.can::<dyn Outlinable>() {
                 error!(
                     "{} must have a location", elem.func().name();
-                    hint: "try using a show rule to customize the outline.entry instead",
+                    hint: "try using a show rule to customize the outline.entry instead";
                 )
             } else {
                 error!("cannot outline {}", elem.func().name())
@@ -617,9 +776,10 @@ fn measure_prefix(
     prefix: &Content,
     loc: Location,
     styles: StyleChain,
+    span: Span,
 ) -> SourceResult<Abs> {
     let pod = Region::new(Axes::splat(Abs::inf()), Axes::splat(false));
-    let link = LocatorLink::measure(loc);
+    let link = LocatorLink::measure(loc, span);
     Ok((engine.routines.layout_frame)(engine, prefix, Locator::link(&link), styles, pod)?
         .width())
 }
@@ -627,13 +787,18 @@ fn measure_prefix(
 /// Compute the base indent and hanging indent for an auto-indented outline
 /// entry of the given level, with the given prefix inset.
 fn compute_auto_indents(
-    introspector: Tracked<Introspector>,
+    engine: &mut Engine,
     outline_loc: Location,
     styles: StyleChain,
     level: NonZeroUsize,
     prefix_inset: Option<Abs>,
+    span: Span,
 ) -> (Rel, Option<Abs>) {
-    let indents = query_prefix_widths(introspector, outline_loc);
+    let elems = engine.introspect(QueryIntrospection(
+        select_where!(PrefixInfo, key => outline_loc),
+        span,
+    ));
+    let indents = determine_prefix_widths(&elems);
 
     let fallback = Em::new(1.2).resolve(styles);
     let get = |i: usize| indents.get(i).copied().flatten().unwrap_or(fallback);
@@ -649,13 +814,9 @@ fn compute_auto_indents(
 /// level, for the outline with the given `loc`. Levels for which there is no
 /// information available yield `None`.
 #[comemo::memoize]
-fn query_prefix_widths(
-    introspector: Tracked<Introspector>,
-    outline_loc: Location,
-) -> SmallVec<[Option<Abs>; 4]> {
+fn determine_prefix_widths(elems: &[Content]) -> SmallVec<[Option<Abs>; 4]> {
     let mut widths = SmallVec::<[Option<Abs>; 4]>::new();
-    let elems = introspector.query(&select_where!(PrefixInfo, key => outline_loc));
-    for elem in &elems {
+    for elem in elems {
         let info = elem.to_packed::<PrefixInfo>().unwrap();
         let level = info.level.get();
         if widths.len() < level {
@@ -667,7 +828,7 @@ fn query_prefix_widths(
 }
 
 /// Helper type for introspection-based prefix alignment.
-#[elem(Construct, Locatable)]
+#[elem(Construct, Unqueriable, Locatable)]
 pub(crate) struct PrefixInfo {
     /// The location of the outline this prefix is part of. This is used to
     /// scope prefix computations to a specific outline.

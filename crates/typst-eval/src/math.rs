@@ -1,16 +1,27 @@
 use ecow::eco_format;
-use typst_library::diag::{At, SourceResult, warning};
+use typst_library::diag::{At, SourceResult};
 use typst_library::foundations::{Content, NativeElement, Symbol, SymbolElem, Value};
 use typst_library::math::{
-    AlignPointElem, AttachElem, FracElem, LrElem, PrimesElem, RootElem,
+    AlignPointElem, AttachElem, EquationElem, FracElem, LrElem, PrimesElem, RootElem,
 };
 use typst_library::text::TextElem;
 use typst_syntax::ast::{self, AstNode, MathTextKind};
 
 use crate::{Eval, Vm};
 
+impl Eval for ast::Equation<'_> {
+    type Output = Content;
+
+    fn eval(self, vm: &mut Vm) -> SourceResult<Self::Output> {
+        let body = self.body().eval(vm)?;
+        let block = self.block();
+        Ok(EquationElem::new(body).with_block(block).pack())
+    }
+}
+
 impl Eval for ast::Math<'_> {
     type Output = Content;
+
     fn eval(self, vm: &mut Vm) -> SourceResult<Self::Output> {
         Ok(Content::sequence(
             self.exprs()
@@ -25,7 +36,7 @@ impl Eval for ast::MathText<'_> {
 
     fn eval(self, _: &mut Vm) -> SourceResult<Self::Output> {
         match self.get() {
-            MathTextKind::Character(c) => Ok(SymbolElem::packed(c)),
+            MathTextKind::Grapheme(text) => Ok(SymbolElem::packed(text.clone())),
             MathTextKind::Number(text) => Ok(TextElem::packed(text.clone())),
         }
     }
@@ -49,7 +60,7 @@ impl Eval for ast::MathShorthand<'_> {
     type Output = Value;
 
     fn eval(self, _: &mut Vm) -> SourceResult<Self::Output> {
-        Ok(Value::Symbol(Symbol::single(self.get())))
+        Ok(Value::Symbol(Symbol::runtime_char(self.get())))
     }
 }
 
@@ -80,14 +91,7 @@ impl Eval for ast::MathAttach<'_> {
         let mut elem = AttachElem::new(base);
 
         if let Some(expr) = self.top() {
-            let top = expr.eval(vm)?;
-            if let Value::Func(_) = top {
-                vm.engine.sink.warn(warning!(
-                    expr.span(), "function literal used as superscript";
-                    hint: "wrap the entire function call in parentheses",
-                ));
-            }
-            elem.t.set(Some(top.display().spanned(self.span())));
+            elem.t.set(Some(expr.eval_display(vm)?));
         }
 
         // Always attach primes in scripts style (not limits style),
@@ -97,14 +101,7 @@ impl Eval for ast::MathAttach<'_> {
         }
 
         if let Some(expr) = self.bottom() {
-            let bottom = expr.eval(vm)?;
-            if let Value::Func(_) = bottom {
-                vm.engine.sink.warn(warning!(
-                    expr.span(), "function literal used as subscript";
-                    hint: "wrap the entire function call in parentheses",
-                ));
-            }
-            elem.b.set(Some(bottom.display().spanned(self.span())));
+            elem.b.set(Some(expr.eval_display(vm)?));
         }
 
         Ok(elem.pack())
@@ -123,9 +120,20 @@ impl Eval for ast::MathFrac<'_> {
     type Output = Content;
 
     fn eval(self, vm: &mut Vm) -> SourceResult<Self::Output> {
-        let num = self.num().eval_display(vm)?;
-        let denom = self.denom().eval_display(vm)?;
-        Ok(FracElem::new(num, denom).pack())
+        let num_expr = self.num();
+        let num = num_expr.eval_display(vm)?;
+        let denom_expr = self.denom();
+        let denom = denom_expr.eval_display(vm)?;
+
+        let num_depar =
+            matches!(num_expr, ast::Expr::Math(math) if math.was_deparenthesized());
+        let denom_depar =
+            matches!(denom_expr, ast::Expr::Math(math) if math.was_deparenthesized());
+
+        Ok(FracElem::new(num, denom)
+            .with_num_deparenthesized(num_depar)
+            .with_denom_deparenthesized(denom_depar)
+            .pack())
     }
 }
 

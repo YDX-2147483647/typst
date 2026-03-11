@@ -16,10 +16,10 @@ use image::{
 
 /// A decoded raster image.
 #[derive(Clone, Hash)]
-pub struct RasterImage(Arc<Repr>);
+pub struct RasterImage(Arc<RasterImageInner>);
 
-/// The internal representation.
-struct Repr {
+/// The internal representation of a [`RasterImage`].
+struct RasterImageInner {
     data: Bytes,
     format: RasterFormat,
     dynamic: Arc<DynamicImage>,
@@ -141,7 +141,7 @@ impl RasterImage {
             }
         };
 
-        Ok(Self(Arc::new(Repr {
+        Ok(Self(Arc::new(RasterImageInner {
             data,
             format,
             exif_rotation: exif_rot,
@@ -171,7 +171,10 @@ impl RasterImage {
         self.dynamic().height()
     }
 
-    /// TODO.
+    /// The EXIF orientation value of the original image.
+    ///
+    /// The [`dynamic`](Self::dynamic) image already has this factored in. This
+    /// value is only relevant to consumers of the raw [`data`](Self::data).
     pub fn exif_rotation(&self) -> Option<u32> {
         self.0.exif_rotation
     }
@@ -194,7 +197,7 @@ impl RasterImage {
     }
 }
 
-impl Hash for Repr {
+impl Hash for RasterImageInner {
     fn hash<H: Hasher>(&self, state: &mut H) {
         // The image is fully defined by data, format, and ICC profile.
         self.data.hash(state);
@@ -346,12 +349,12 @@ fn apply_rotation(image: &mut DynamicImage, rotation: u32) {
             ops::flip_horizontal_in_place(image);
             *image = image.rotate270();
         }
-        6 => *image = image.rotate270(),
+        6 => *image = image.rotate90(),
         7 => {
             ops::flip_horizontal_in_place(image);
             *image = image.rotate90();
         }
-        8 => *image = image.rotate90(),
+        8 => *image = image.rotate270(),
         _ => {}
     }
 }

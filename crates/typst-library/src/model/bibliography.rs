@@ -1,6 +1,6 @@
 use std::any::TypeId;
-use std::ffi::OsStr;
 use std::fmt::{self, Debug, Formatter};
+use std::num::NonZeroUsize;
 use std::path::Path;
 use std::sync::{Arc, LazyLock};
 
@@ -10,39 +10,36 @@ use hayagriva::archive::ArchivedStyle;
 use hayagriva::io::BibLaTeXError;
 use hayagriva::{
     BibliographyDriver, BibliographyRequest, CitationItem, CitationRequest, Library,
-    SpecificLocator, citationberg,
+    SpecificLocator, TransparentLocator, citationberg,
 };
 use indexmap::IndexMap;
 use rustc_hash::{FxBuildHasher, FxHashMap};
-use smallvec::{SmallVec, smallvec};
+use smallvec::SmallVec;
 use typst_syntax::{Span, Spanned, SyntaxMode};
-use typst_utils::{ManuallyHash, PicoStr};
+use typst_utils::{ManuallyHash, NonZeroExt, PicoStr};
 
 use crate::World;
 use crate::diag::{
-    At, HintedStrResult, LoadError, LoadResult, LoadedWithin, ReportPos, SourceResult,
-    StrResult, bail, error,
+    At, HintedStrResult, LoadError, LoadResult, LoadedWithin, ReportPos,
+    SourceDiagnostic, SourceResult, StrResult, bail, error, warning,
 };
 use crate::engine::{Engine, Sink};
 use crate::foundations::{
-    Bytes, CastInfo, Content, Derived, FromValue, IntoValue, Label, NativeElement,
-    OneOrMultiple, Packed, Reflect, Scope, ShowSet, Smart, StyleChain, Styles,
-    Synthesize, Value, elem,
+    Bytes, CastInfo, Content, Context, Derived, FromValue, IntoValue, Label,
+    NativeElement, OneOrMultiple, Packed, Reflect, Scope, ShowSet, Smart, StyleChain,
+    Styles, Synthesize, Value, elem,
 };
-use crate::introspection::{Introspector, Locatable, Location};
-use crate::layout::{
-    BlockBody, BlockElem, Em, GridCell, GridChild, GridElem, GridItem, HElem, PadElem,
-    Sizing, TrackSizings,
+use crate::introspection::{
+    History, Introspect, Introspector, Locatable, Location, QueryIntrospection,
 };
+use crate::layout::{BlockBody, BlockElem, Em, HElem, PadElem};
 use crate::loading::{DataSource, Load, LoadSource, Loaded, format_yaml_error};
 use crate::model::{
-    CitationForm, CiteGroup, Destination, FootnoteElem, HeadingElem, LinkElem, Url,
+    CitationForm, CiteGroup, Destination, DirectLinkElem, FootnoteElem, HeadingElem,
+    LinkElem, Url,
 };
 use crate::routines::Routines;
-use crate::text::{
-    FontStyle, Lang, LocalName, Region, Smallcaps, SubElem, SuperElem, TextElem,
-    WeightDelta,
-};
+use crate::text::{Lang, LocalName, Region, SmallcapsElem, SubElem, SuperElem, TextElem};
 
 /// A bibliography / reference listing.
 ///
@@ -92,8 +89,7 @@ pub struct BibliographyElem {
     /// BibLaTeX `.bib` files.
     ///
     /// This can be a:
-    /// - A path string to load a bibliography file from the given path. For
-    ///   more details about paths, see the [Paths section]($syntax/#paths).
+    /// - A path string or [`path`] to load a bibliography file from.
     /// - Raw bytes from which the bibliography should be decoded.
     /// - An array where each item is one of the above.
     #[required]
@@ -129,16 +125,15 @@ pub struct BibliographyElem {
     /// - A string with the name of one of the built-in styles (see below). Some
     ///   of the styles listed below appear twice, once with their full name and
     ///   once with a short alias.
-    /// - A path string to a [CSL file](https://citationstyles.org/). For more
-    ///   details about paths, see the [Paths section]($syntax/#paths).
+    /// - A path string or [`path`] to a [CSL file](https://citationstyles.org/).
     /// - Raw bytes from which a CSL style should be decoded.
     #[parse(match args.named::<Spanned<CslSource>>("style")? {
-        Some(source) => Some(CslStyle::load(engine.world, source)?),
+        Some(source) => Some(CslStyle::load(engine, source)?),
         None => None,
     })]
     #[default({
         let default = ArchivedStyle::InstituteOfElectricalAndElectronicsEngineers;
-        Derived::new(CslSource::Named(default), CslStyle::from_archived(default))
+        Derived::new(CslSource::Named(default, None), CslStyle::from_archived(default))
     })]
     pub style: Derived<CslSource, CslStyle>,
 
@@ -155,9 +150,10 @@ pub struct BibliographyElem {
 
 impl BibliographyElem {
     /// Find the document's bibliography.
-    pub fn find(introspector: Tracked<Introspector>) -> StrResult<Packed<Self>> {
-        let query = introspector.query(&Self::ELEM.select());
-        let mut iter = query.iter();
+    pub fn find(engine: &mut Engine, span: Span) -> StrResult<Packed<Self>> {
+        let elems = engine.introspect(QueryIntrospection(Self::ELEM.select(), span));
+
+        let mut iter = elems.iter();
         let Some(elem) = iter.next() else {
             bail!("the document does not contain a bibliography");
         };
@@ -170,10 +166,9 @@ impl BibliographyElem {
     }
 
     /// Whether the bibliography contains the given key.
-    pub fn has(engine: &Engine, key: Label) -> bool {
+    pub fn has(engine: &mut Engine, key: Label, span: Span) -> bool {
         engine
-            .introspector
-            .query(&Self::ELEM.select())
+            .introspect(QueryIntrospection(Self::ELEM.select(), span))
             .iter()
             .any(|elem| elem.to_packed::<Self>().unwrap().sources.derived.has(key))
     }
@@ -189,6 +184,23 @@ impl BibliographyElem {
             }
         }
         vec
+    }
+}
+
+impl Packed<BibliographyElem> {
+    /// Produces the heading for the bibliography, if any.
+    pub fn realize_title(&self, styles: StyleChain) -> Option<Content> {
+        self.title
+            .get_cloned(styles)
+            .unwrap_or_else(|| {
+                Some(TextElem::packed(Packed::<BibliographyElem>::local_name_in(styles)))
+            })
+            .map(|title| {
+                HeadingElem::new(title)
+                    .with_depth(NonZeroUsize::ONE)
+                    .pack()
+                    .spanned(self.span())
+            })
     }
 }
 
@@ -295,13 +307,7 @@ fn decode_library(loaded: &Loaded) -> SourceResult<Library> {
     if let LoadSource::Path(file_id) = loaded.source.v {
         // If we got a path, use the extension to determine whether it is
         // YAML or BibLaTeX.
-        let ext = file_id
-            .vpath()
-            .as_rooted_path()
-            .extension()
-            .and_then(OsStr::to_str)
-            .unwrap_or_default();
-
+        let ext = file_id.vpath().extension().unwrap_or_default();
         match ext.to_lowercase().as_str() {
             "yml" | "yaml" => hayagriva::io::from_yaml_str(data)
                 .map_err(format_yaml_error)
@@ -322,7 +328,7 @@ fn decode_library(loaded: &Loaded) -> SourceResult<Library> {
             Err(err) => err,
         };
 
-        // If it can be decoded as BibLaTeX, we use that isntead.
+        // If it can be decoded as BibLaTeX, we use that instead.
         let bib_errs = match hayagriva::io::from_biblatex_str(data) {
             // If the file is almost valid yaml, but contains no `@` character
             // it will be successfully parsed as an empty BibLaTeX library,
@@ -381,13 +387,18 @@ pub struct CslStyle(Arc<ManuallyHash<citationberg::IndependentStyle>>);
 impl CslStyle {
     /// Load a CSL style from a data source.
     pub fn load(
-        world: Tracked<dyn World + '_>,
+        engine: &mut Engine,
         Spanned { v: source, span }: Spanned<CslSource>,
     ) -> SourceResult<Derived<CslSource, Self>> {
         let style = match &source {
-            CslSource::Named(style) => Self::from_archived(*style),
+            CslSource::Named(style, deprecation) => {
+                if let Some(message) = deprecation {
+                    engine.sink.warn(warning!(span, "{message}"));
+                }
+                Self::from_archived(*style)
+            }
             CslSource::Normal(source) => {
-                let loaded = Spanned::new(source, span).load(world)?;
+                let loaded = Spanned::new(source, span).load(engine.world)?;
                 Self::from_data(&loaded.data).within(&loaded)?
             }
         };
@@ -403,7 +414,7 @@ impl CslStyle {
                 typst_utils::hash128(&(TypeId::of::<ArchivedStyle>(), archived)),
             ))),
             // Ensured by `test_bibliography_load_builtin_styles`.
-            _ => unreachable!("archive should not contain dependant styles"),
+            _ => unreachable!("archive should not contain dependent styles"),
         }
     }
 
@@ -432,8 +443,8 @@ impl CslStyle {
 /// Source for a CSL style.
 #[derive(Debug, Clone, PartialEq, Hash)]
 pub enum CslSource {
-    /// A predefined named style.
-    Named(ArchivedStyle),
+    /// A predefined named style and potentially a deprecation warning.
+    Named(ArchivedStyle, Option<&'static str>),
     /// A normal data source.
     Normal(DataSource),
 }
@@ -488,9 +499,23 @@ impl FromValue for CslSource {
         if EcoString::castable(&value) {
             let string = EcoString::from_value(value.clone())?;
             if Path::new(string.as_str()).extension().is_none() {
+                let mut warning = None;
+                if string.as_str() == "chicago-fullnotes" {
+                    warning = Some(
+                        "style \"chicago-fullnotes\" has been deprecated \
+                         in favor of \"chicago-notes\"",
+                    );
+                } else if string.as_str() == "modern-humanities-research-association" {
+                    warning = Some(
+                        "style \"modern-humanities-research-association\" \
+                         has been deprecated in favor of \
+                         \"modern-humanities-research-association-notes\"",
+                    );
+                }
+
                 let style = ArchivedStyle::by_name(&string)
                     .ok_or_else(|| eco_format!("unknown style: {}", string))?;
-                return Ok(CslSource::Named(style));
+                return Ok(CslSource::Named(style, warning));
             }
         }
 
@@ -502,7 +527,7 @@ impl IntoValue for CslSource {
     fn into_value(self) -> Value {
         match self {
             // We prefer the shorter names which are at the back of the array.
-            Self::Named(v) => v.names().last().unwrap().into_value(),
+            Self::Named(v, _) => v.names().last().unwrap().into_value(),
             Self::Normal(v) => v.into_value(),
         }
     }
@@ -517,15 +542,28 @@ pub struct Works {
     pub citations: FxHashMap<Location, SourceResult<Content>>,
     /// Lists all references in the bibliography, with optional prefix, or
     /// `None` if the citation style can't be used for bibliographies.
-    pub references: Option<Vec<(Option<Content>, Content)>>,
+    pub references: Option<Vec<(Option<Content>, Content, Location)>>,
     /// Whether the bibliography should have hanging indent.
     pub hanging_indent: bool,
 }
 
 impl Works {
     /// Generate all citations and the whole bibliography.
-    pub fn generate(engine: &Engine) -> StrResult<Arc<Works>> {
-        Self::generate_impl(engine.routines, engine.world, engine.introspector)
+    pub fn generate(engine: &mut Engine, span: Span) -> SourceResult<Arc<Works>> {
+        let bibliography = BibliographyElem::find(engine, span).at(span)?;
+        let groups = engine.introspect(CiteGroupIntrospection(span));
+        Self::generate_impl(engine.routines, engine.world, bibliography, groups).at(span)
+    }
+
+    /// Generate all citations and the whole bibliography, given an existing
+    /// bibliography (no need to query it).
+    pub fn with_bibliography(
+        engine: &mut Engine,
+        bibliography: Packed<BibliographyElem>,
+    ) -> SourceResult<Arc<Works>> {
+        let span = bibliography.span();
+        let groups = engine.introspect(CiteGroupIntrospection(span));
+        Self::generate_impl(engine.routines, engine.world, bibliography, groups).at(span)
     }
 
     /// The internal implementation of [`Works::generate`].
@@ -533,12 +571,62 @@ impl Works {
     fn generate_impl(
         routines: &Routines,
         world: Tracked<dyn World + '_>,
-        introspector: Tracked<Introspector>,
+        bibliography: Packed<BibliographyElem>,
+        groups: EcoVec<Content>,
     ) -> StrResult<Arc<Works>> {
-        let mut generator = Generator::new(routines, world, introspector)?;
+        let mut generator = Generator::new(routines, world, bibliography, groups)?;
         let rendered = generator.drive();
         let works = generator.display(&rendered)?;
         Ok(Arc::new(works))
+    }
+
+    /// Extracts the generated references, failing with an error if none have
+    /// been generated.
+    pub fn references<'a>(
+        &'a self,
+        elem: &Packed<BibliographyElem>,
+        styles: StyleChain,
+    ) -> SourceResult<&'a [(Option<Content>, Content, Location)]> {
+        self.references
+            .as_deref()
+            .ok_or_else(|| match elem.style.get_ref(styles).source {
+                CslSource::Named(style, _) => eco_format!(
+                    "CSL style \"{}\" is not suitable for bibliographies",
+                    style.display_name()
+                ),
+                CslSource::Normal(..) => {
+                    "CSL style is not suitable for bibliographies".into()
+                }
+            })
+            .at(elem.span())
+    }
+}
+
+/// Retrieves all citation groups in the document.
+///
+/// This is separate from `QueryIntrospection` so that we can customize the
+/// diagnostic as the `CiteGroup` is internal. The default query message is also
+/// not that helpful in this case.
+#[derive(Debug, Clone, PartialEq, Hash)]
+struct CiteGroupIntrospection(Span);
+
+impl Introspect for CiteGroupIntrospection {
+    type Output = EcoVec<Content>;
+
+    fn introspect(
+        &self,
+        _: &mut Engine,
+        introspector: Tracked<Introspector>,
+    ) -> Self::Output {
+        introspector.query(&CiteGroup::ELEM.select())
+    }
+
+    fn diagnose(&self, _: &History<Self::Output>) -> SourceDiagnostic {
+        warning!(
+            self.0, "citation grouping did not stabilize";
+            hint: "this can happen if the citations and bibliographies in the \
+                   document did not stabilize by the end of the third layout iteration";
+        )
     }
 }
 
@@ -588,10 +676,9 @@ impl<'a> Generator<'a> {
     fn new(
         routines: &'a Routines,
         world: Tracked<'a, dyn World + 'a>,
-        introspector: Tracked<Introspector>,
+        bibliography: Packed<BibliographyElem>,
+        groups: EcoVec<Content>,
     ) -> StrResult<Self> {
-        let bibliography = BibliographyElem::find(introspector)?;
-        let groups = introspector.query(&CiteGroup::ELEM.select());
         let infos = Vec::with_capacity(groups.len());
         Ok(Self {
             routines,
@@ -633,16 +720,18 @@ impl<'a> Generator<'a> {
                     errors.push(error!(
                         child.span(),
                         "key `{}` does not exist in the bibliography",
-                        child.key.resolve()
+                        child.key.resolve(),
                     ));
                     continue;
                 };
 
                 let supplement = child.supplement.get_cloned(StyleChain::default());
-                let locator = supplement.as_ref().map(|_| {
+                let locator = supplement.as_ref().map(|c| {
                     SpecificLocator(
                         citationberg::taxonomy::Locator::Custom,
-                        hayagriva::LocatorPayload::Transparent,
+                        hayagriva::LocatorPayload::Transparent(TransparentLocator::new(
+                            c.clone(),
+                        )),
                     )
                 });
 
@@ -759,11 +848,8 @@ impl<'a> Generator<'a> {
             let content = if info.subinfos.iter().all(|sub| sub.hidden) {
                 Content::empty()
             } else {
-                let mut content = renderer.display_elem_children(
-                    &citation.citation,
-                    &mut None,
-                    true,
-                )?;
+                let mut content =
+                    renderer.display_elem_children(&citation.citation, None, true)?;
 
                 if info.footnote {
                     content = FootnoteElem::with_content(content).pack();
@@ -783,7 +869,7 @@ impl<'a> Generator<'a> {
     fn display_references(
         &self,
         rendered: &hayagriva::Rendered,
-    ) -> StrResult<Option<Vec<(Option<Content>, Content)>>> {
+    ) -> StrResult<Option<Vec<(Option<Content>, Content, Location)>>> {
         let Some(rendered) = &rendered.bibliography else { return Ok(None) };
 
         // Determine for each citation key where it first occurred, so that we
@@ -818,26 +904,27 @@ impl<'a> Generator<'a> {
             let mut prefix = item
                 .first_field
                 .as_ref()
-                .map(|elem| {
-                    let mut content =
-                        renderer.display_elem_child(elem, &mut None, false)?;
-                    if let Some(location) = first_occurrences.get(item.key.as_str()) {
-                        let dest = Destination::Location(*location);
-                        content = content.linked(dest);
-                    }
-                    StrResult::Ok(content)
-                })
+                .map(|elem| renderer.display_elem_child(elem, None, false))
                 .transpose()?;
 
             // Render the main reference content.
-            let mut reference =
-                renderer.display_elem_children(&item.content, &mut prefix, false)?;
+            let reference = renderer.display_elem_children(
+                &item.content,
+                Some(&mut prefix),
+                false,
+            )?;
 
-            // Attach a backlink to either the prefix or the reference so that
-            // we can link to the bibliography entry.
-            prefix.as_mut().unwrap_or(&mut reference).set_location(backlink);
+            let prefix = prefix.map(|content| {
+                if let Some(location) = first_occurrences.get(item.key.as_str()) {
+                    let alt = content.plain_text();
+                    let body = content.spanned(self.bibliography.span());
+                    DirectLinkElem::new(*location, body, Some(alt)).pack()
+                } else {
+                    content
+                }
+            });
 
-            output.push((prefix, reference));
+            output.push((prefix, reference, backlink));
         }
 
         Ok(Some(output))
@@ -870,7 +957,7 @@ impl ElemRenderer<'_> {
     fn display_elem_children(
         &self,
         elems: &hayagriva::ElemChildren,
-        prefix: &mut Option<Content>,
+        mut prefix: Option<&mut Option<Content>>,
         is_citation: bool,
     ) -> StrResult<Content> {
         Ok(Content::sequence(
@@ -879,7 +966,11 @@ impl ElemRenderer<'_> {
                 .iter()
                 .enumerate()
                 .map(|(i, elem)| {
-                    self.display_elem_child(elem, prefix, is_citation && i == 0)
+                    self.display_elem_child(
+                        elem,
+                        prefix.as_deref_mut(),
+                        is_citation && i == 0,
+                    )
                 })
                 .collect::<StrResult<Vec<_>>>()?,
         ))
@@ -889,7 +980,7 @@ impl ElemRenderer<'_> {
     fn display_elem_child(
         &self,
         elem: &hayagriva::ElemChild,
-        prefix: &mut Option<Content>,
+        prefix: Option<&mut Option<Content>>,
         trim_start: bool,
     ) -> StrResult<Content> {
         Ok(match elem {
@@ -909,34 +1000,17 @@ impl ElemRenderer<'_> {
     fn display_elem(
         &self,
         elem: &hayagriva::Elem,
-        prefix: &mut Option<Content>,
+        mut prefix: Option<&mut Option<Content>>,
     ) -> StrResult<Content> {
         use citationberg::Display;
 
         let block_level = matches!(elem.display, Some(Display::Block | Display::Indent));
 
-        let mut suf_prefix = None;
         let mut content = self.display_elem_children(
             &elem.children,
-            if block_level { &mut suf_prefix } else { prefix },
+            if block_level { None } else { prefix.as_deref_mut() },
             false,
         )?;
-
-        if let Some(prefix) = suf_prefix {
-            const COLUMN_GUTTER: Em = Em::new(0.65);
-            content = GridElem::new(vec![
-                GridChild::Item(GridItem::Cell(
-                    Packed::new(GridCell::new(prefix)).spanned(self.span),
-                )),
-                GridChild::Item(GridItem::Cell(
-                    Packed::new(GridCell::new(content)).spanned(self.span),
-                )),
-            ])
-            .with_columns(TrackSizings(smallvec![Sizing::Auto; 2]))
-            .with_column_gutter(TrackSizings(smallvec![COLUMN_GUTTER.into()]))
-            .pack()
-            .spanned(self.span);
-        }
 
         match elem.display {
             Some(Display::Block) => {
@@ -946,20 +1020,29 @@ impl ElemRenderer<'_> {
                     .spanned(self.span);
             }
             Some(Display::Indent) => {
-                content = PadElem::new(content).pack().spanned(self.span);
+                content = CslIndentElem::new(content).pack().spanned(self.span);
             }
             Some(Display::LeftMargin) => {
-                *prefix.get_or_insert_with(Default::default) += content;
-                return Ok(Content::empty());
+                // The `display="left-margin"` attribute is only supported at
+                // the top-level (when prefix is `Some(_)`). Within a
+                // block-level container, it is ignored. The CSL spec is not
+                // specific about this, but it is in line with citeproc.js's
+                // behaviour.
+                if let Some(prefix) = prefix {
+                    *prefix.get_or_insert_with(Default::default) += content;
+                    return Ok(Content::empty());
+                }
             }
             _ => {}
         }
 
+        content = content.spanned(self.span);
+
         if let Some(hayagriva::ElemMeta::Entry(i)) = elem.meta
             && let Some(location) = (self.link)(i)
         {
-            let dest = Destination::Location(location);
-            content = content.linked(dest);
+            let alt = content.plain_text();
+            content = DirectLinkElem::new(location, content, Some(alt)).pack();
         }
 
         Ok(content)
@@ -972,6 +1055,8 @@ impl ElemRenderer<'_> {
             self.world,
             // TODO: propagate warnings
             Sink::new().track_mut(),
+            Introspector::default().track(),
+            Context::none().track(),
             math,
             self.span,
             SyntaxMode::Math,
@@ -1017,24 +1102,27 @@ fn apply_formatting(mut content: Content, format: &hayagriva::Formatting) -> Con
     match format.font_style {
         citationberg::FontStyle::Normal => {}
         citationberg::FontStyle::Italic => {
-            content = content.set(TextElem::style, FontStyle::Italic);
+            content = content.emph();
         }
     }
 
     match format.font_variant {
         citationberg::FontVariant::Normal => {}
         citationberg::FontVariant::SmallCaps => {
-            content = content.set(TextElem::smallcaps, Some(Smallcaps::Minuscules));
+            content = SmallcapsElem::new(content).pack();
         }
     }
 
     match format.font_weight {
         citationberg::FontWeight::Normal => {}
         citationberg::FontWeight::Bold => {
-            content = content.set(TextElem::delta, WeightDelta(300));
+            content = content.strong();
         }
         citationberg::FontWeight::Light => {
-            content = content.set(TextElem::delta, WeightDelta(-100));
+            // We don't have a semantic element for "light" and a `StrongElem`
+            // with negative delta does not have the appropriate semantics, so
+            // keeping this as a direct style.
+            content = CslLightElem::new(content).pack();
         }
     }
 
@@ -1051,10 +1139,11 @@ fn apply_formatting(mut content: Content, format: &hayagriva::Formatting) -> Con
         citationberg::VerticalAlign::Baseline => {}
         citationberg::VerticalAlign::Sup => {
             // Add zero-width weak spacing to make the superscript "sticky".
-            content = HElem::hole().pack() + SuperElem::new(content).pack().spanned(span);
+            content =
+                HElem::hole().clone() + SuperElem::new(content).pack().spanned(span);
         }
         citationberg::VerticalAlign::Sub => {
-            content = HElem::hole().pack() + SubElem::new(content).pack().spanned(span);
+            content = HElem::hole().clone() + SubElem::new(content).pack().spanned(span);
         }
     }
 
@@ -1070,6 +1159,31 @@ fn locale(lang: Lang, region: Option<Region>) -> citationberg::LocaleCode {
         value.push_str(region.as_str())
     }
     citationberg::LocaleCode(value)
+}
+
+/// Translation of `font-weight="light"` in CSL.
+///
+/// We translate `font-weight: "bold"` to `<strong>` since it's likely that the
+/// CSL spec just talks about bold because it has no notion of semantic
+/// elements. The benefits of a strict reading of the spec are also rather
+/// questionable, while using semantic elements makes the bibliography more
+/// accessible, easier to style, and more portable across export targets.
+#[elem]
+pub struct CslLightElem {
+    #[required]
+    pub body: Content,
+}
+
+/// Translation of `display="indent"` in CSL.
+///
+/// A `display="block"` is simply translated to a Typst `BlockElem`. Similarly,
+/// we could translate `display="indent"` to a `PadElem`, but (a) it does not
+/// yet have support in HTML and (b) a `PadElem` described a fixed padding while
+/// CSL leaves the amount of padding user-defined so it's not a perfect fit.
+#[elem]
+pub struct CslIndentElem {
+    #[required]
+    pub body: Content,
 }
 
 #[cfg(test)]

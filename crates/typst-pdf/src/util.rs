@@ -1,19 +1,38 @@
-//! Basic utilities for converting typst types to krilla.
+//! Basic utilities for converting Typst types to krilla.
 
+use ecow::{EcoString, eco_format};
 use krilla::geom as kg;
 use krilla::geom::PathBuilder;
 use krilla::paint as kp;
-use typst_library::layout::{Abs, Point, Size, Transform};
+use krilla::tagging as kt;
+use typst_library::foundations::Repr;
+use typst_library::layout::{Abs, Point, Sides, Size, Transform};
 use typst_library::text::Font;
 use typst_library::visualize::{Curve, CurveItem, FillRule, LineCap, LineJoin};
 
+pub(crate) trait SidesExt<T> {
+    /// Map to the [`kt::Sides`] struct assuming [`kt::WritingMode::LrTb`].
+    fn to_lrtb_krilla(self) -> kt::Sides<T>;
+}
+
+impl<T> SidesExt<T> for Sides<T> {
+    fn to_lrtb_krilla(self) -> kt::Sides<T> {
+        kt::Sides {
+            before: self.top,
+            after: self.bottom,
+            start: self.left,
+            end: self.right,
+        }
+    }
+}
+
 pub(crate) trait SizeExt {
-    fn to_krilla(&self) -> kg::Size;
+    fn to_krilla(&self) -> Option<kg::Size>;
 }
 
 impl SizeExt for Size {
-    fn to_krilla(&self) -> kg::Size {
-        kg::Size::from_wh(self.x.to_f32(), self.y.to_f32()).unwrap()
+    fn to_krilla(&self) -> Option<kg::Size> {
+        kg::Size::from_wh(self.x.to_f32(), self.y.to_f32())
     }
 }
 
@@ -96,11 +115,14 @@ impl AbsExt for Abs {
 }
 
 /// Display the font family of a font.
-pub(crate) fn display_font(font: &Font) -> &str {
-    &font.info().family
+pub(crate) fn display_font(font: Option<&Font>) -> EcoString {
+    match font {
+        Some(font) => eco_format!("font `{}`", font.info().family.repr()),
+        None => "a font".into(),
+    }
 }
 
-/// Convert a typst path to a krilla path.
+/// Convert a Typst path to a krilla path.
 pub(crate) fn convert_path(path: &Curve, builder: &mut PathBuilder) {
     for item in &path.0 {
         match item {

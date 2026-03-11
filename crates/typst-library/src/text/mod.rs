@@ -42,14 +42,15 @@ use smallvec::SmallVec;
 use ttf_parser::Tag;
 use typst_syntax::Spanned;
 use typst_utils::singleton;
+use unicode_segmentation::UnicodeSegmentation;
 
 use crate::World;
-use crate::diag::{HintedStrResult, SourceResult, StrResult, bail, warning};
+use crate::diag::{Hint, HintedStrResult, SourceResult, StrResult, bail, warning};
 use crate::engine::Engine;
 use crate::foundations::{
     Args, Array, Cast, Construct, Content, Dict, Fold, IntoValue, NativeElement, Never,
-    NoneValue, Packed, PlainText, Regex, Repr, Resolve, Scope, Set, Smart, StyleChain,
-    cast, dict, elem,
+    NoneValue, Packed, PlainText, Regex, Repr, Resolve, Scope, Set, Smart, Str,
+    StyleChain, cast, dict, elem,
 };
 use crate::layout::{Abs, Axis, Dir, Em, Length, Ratio, Rel};
 use crate::math::{EquationElem, MathSize};
@@ -102,7 +103,7 @@ pub struct TextElem {
     ///   family shall be used. This can be:
     ///   - A predefined coverage set:
     ///     - `{"latin-in-cjk"}` covers all codepoints except for those which
-    ///       exist in Latin fonts, but should preferrably be taken from CJK
+    ///       exist in Latin fonts, but should preferably be taken from CJK
     ///       fonts.
     ///   - A [regular expression]($regex) that defines exactly which codepoints
     ///     shall be covered. Accepts only the subset of regular expressions
@@ -125,7 +126,7 @@ pub struct TextElem {
     ///   `New Computer Modern Math`, and `DejaVu Sans Mono`. In addition, you
     ///   can use the `--font-path` argument or `TYPST_FONT_PATHS` environment
     ///   variable to add directories that should be scanned for fonts. The
-    ///   priority is: `--font-paths` > system fonts > embedded fonts. Run
+    ///   priority is: `--font-path` > system fonts > embedded fonts. Run
     ///   `typst fonts` to see the fonts that Typst has discovered on your
     ///   system. Note that you can pass the `--ignore-system-fonts` parameter
     ///   to the CLI to ensure Typst won't search for system fonts.
@@ -275,7 +276,7 @@ pub struct TextElem {
                 bail!(
                     paint.span,
                     "gradients and tilings on text must be relative to the parent";
-                    hint: "make sure to set `relative: auto` on your text fill"
+                    hint: "make sure to set `relative: auto` on your text fill";
                 );
             }
         paint.map(|paint| paint.v)
@@ -404,16 +405,36 @@ pub struct TextElem {
     ///   language.
     /// - And all other things which are language-aware.
     ///
-    /// ```example
+    /// Choosing the correct language is important for accessibility. For
+    /// example, screen readers will use it to choose a voice that matches the
+    /// language of the text. If your document is in another language than
+    /// English (the default), you should set the text language at the start of
+    /// your document, before any other content. You can, for example, put it
+    /// right after the `[#set document(/* ... */)]` rule that [sets your
+    /// document's title]($document.title).
+    ///
+    /// If your document contains passages in a different language than the main
+    /// language, you should locally change the text language just for those parts,
+    /// either with a set rule [scoped to a block]($scripting/#blocks) or using
+    /// a direct text function call such as `[#text(lang: "de")[...]]`.
+    ///
+    /// If multiple codes are available for your language, you should prefer the
+    /// two-letter code (ISO 639-1) over the three-letter codes (ISO 639-2/3).
+    /// When you have to use a three-letter code and your language differs
+    /// between ISO 639-2 and ISO 639-3, use ISO 639-2 for PDF 1.7 (Typst's
+    /// default for PDF export) and below and ISO 639-3 for PDF 2.0 and HTML
+    /// export.
+    ///
+    /// The language code is case-insensitive, and will be lowercased when
+    /// accessed through [context]($context).
+    ///
+    /// ```example:"Setting the text language to German"
     /// #set text(lang: "de")
     /// #outline()
     ///
     /// = Einleitung
     /// In diesem Dokument, ...
     /// ```
-    ///
-    /// The language code is case-insensitive, and will be lowercased when
-    /// accessed through [context]($context).
     #[default(Lang::ENGLISH)]
     #[ghost]
     pub lang: Lang,
@@ -575,7 +596,8 @@ pub struct TextElem {
     ///
     /// Sometimes fonts contain alternative glyphs for the same codepoint.
     /// Setting this to `{true}` switches to these by enabling the OpenType
-    /// `salt` font feature.
+    /// `salt` font feature. An integer may be used to select between multiple
+    /// alternates.
     ///
     /// ```example
     /// #set text(
@@ -588,9 +610,8 @@ pub struct TextElem {
     /// #set text(alternates: true)
     /// 0, a, g, ß
     /// ```
-    #[default(false)]
     #[ghost]
-    pub alternates: bool,
+    pub alternates: Alternates,
 
     /// Which stylistic sets to apply. Font designers can categorize alternative
     /// glyphs forms into stylistic sets. As this value is highly font-specific,
@@ -623,6 +644,11 @@ pub struct TextElem {
     /// #set text(ligatures: false)
     /// A fine ligature.
     /// ```
+    ///
+    /// Note that some programming fonts use other OpenType font features to
+    /// implement "ligatures," including the contextual alternates (`calt`)
+    /// feature, which is also enabled by default. Use the general
+    /// [`features`]($text.features) parameter to control such features.
     #[default(true)]
     #[ghost]
     pub ligatures: bool,
@@ -699,12 +725,21 @@ pub struct TextElem {
     /// - If given an array of strings, sets the features identified by the
     ///   strings to `{1}`.
     /// - If given a dictionary mapping to numbers, sets the features
-    ///   identified by the keys to the values.
+    ///   identified by the keys to the values. This allows interacting with
+    ///   non-boolean features such as `swsh`.
     ///
-    /// ```example
+    /// ```example:"Give an array of strings"
     /// // Enable the `frac` feature manually.
     /// #set text(features: ("frac",))
     /// 1/2
+    /// ```
+    ///
+    /// ```example:"Give a dictionary mapping to numbers"
+    /// #set text(font: "Cascadia Code")
+    /// =>
+    /// // Disable the contextual alternates (`calt`) feature.
+    /// #set text(features: (calt: 0))
+    /// =>
     /// ```
     #[fold]
     #[ghost]
@@ -830,7 +865,13 @@ impl FontFamily {
 
 cast! {
     FontFamily,
-    self => self.name.into_value(),
+    self => match self.covers {
+        Some(covers) => dict![
+            "name" => self.name,
+            "covers" => covers
+        ].into_value(),
+        None => self.name.into_value()
+    },
     string: EcoString => Self::new(&string),
     mut v: Dict => {
         let ret = Self::with_coverage(
@@ -890,7 +931,7 @@ cast! {
             ) => {}
             _ => bail!(
                 "coverage regex may only use dot, letters, and character classes";
-                hint: "the regex is applied to each letter individually"
+                hint: "the regex is applied to each letter individually";
             ),
         }
         Covers::Regex(regex)
@@ -925,7 +966,7 @@ impl<'a> IntoIterator for &'a FontList {
 cast! {
     FontList,
     self => if self.0.len() == 1 {
-        self.0.into_iter().next().unwrap().name.into_value()
+        self.0.into_iter().next().unwrap().into_value()
     } else {
         self.0.into_value()
     },
@@ -1127,8 +1168,19 @@ impl Resolve for TextDir {
     }
 }
 
+/// A selection into the Stylistic Alternates.
+#[derive(Debug, Default, Copy, Clone, Eq, PartialEq, Hash)]
+pub struct Alternates(u32);
+
+cast! {
+    Alternates,
+    self => self.0.into_value(),
+    v: bool => Self(v as u32),
+    v: u32 => Self(v)
+}
+
 /// A set of stylistic sets to enable.
-#[derive(Debug, Copy, Clone, Default, Eq, PartialEq, Hash)]
+#[derive(Debug, Default, Copy, Clone, Eq, PartialEq, Hash)]
 pub struct StylisticSets(u32);
 
 impl StylisticSets {
@@ -1193,6 +1245,43 @@ pub enum NumberWidth {
 pub struct FontFeatures(pub Vec<(Tag, u32)>);
 
 cast! {
+    Tag,
+    v: Str => {
+        // Tags must: https://learn.microsoft.com/en-us/typography/opentype/spec/otff#data-types
+        // - be one to four bytes in length
+        // - be representable as printable ASCII (0x20..=0x7E)
+        // - contain at least one character that isn't padding (0x20, space)
+        // - padding may only appear at the end of a tag
+
+        if let Some(cluster) = v.graphemes(true).find(|v| {
+            !v.as_bytes().iter().all(|v| (0x20..=0x7E).contains(v))
+        }) {
+            bail!(
+                "feature tag may contain only printable ASCII characters";
+                hint: "found invalid cluster `{}`", cluster.repr();
+            )
+        }
+
+        if !(1..=4).contains(&v.len()) {
+            bail!(
+                "feature tag must be one to four characters in length";
+                hint: "found {} characters", v.len();
+            );
+        }
+
+        let mut within_padding = false;
+        for (i, &v) in v.as_bytes().iter().enumerate() {
+            if (within_padding && v != b' ') || (i == 0 && v == b' ') {
+                bail!("spaces may only appear as padding following a feature tag")
+            }
+            within_padding |= b' ' == v;
+        }
+
+        Self::from_bytes_lossy(v.as_bytes())
+    }
+}
+
+cast! {
     FontFeatures,
     self => self.0
         .into_iter()
@@ -1205,19 +1294,32 @@ cast! {
         .into_value(),
     values: Array => Self(values
         .into_iter()
-        .map(|v| {
-            let tag = v.cast::<EcoString>()?;
-            Ok((Tag::from_bytes_lossy(tag.as_bytes()), 1))
-        })
+        .enumerate()
+        .map(|(i, v)| Ok((
+            v.clone().cast::<Tag>().hint(tag_hint_helper(i, &v)).map_err(|e| {
+                // Append a hint if the value is a string containing the
+                // assignment operator `=` or another type was supplied.
+                if v.cast::<Str>().map_or(true, |v| v.as_str().contains('=')) {
+                    e.with_hint("to set features with custom values, consider supplying a dictionary")
+                } else {
+                    e
+                }
+            })?,
+            1
+        )))
         .collect::<HintedStrResult<_>>()?),
     values: Dict => Self(values
         .into_iter()
-        .map(|(k, v)| {
-            let num = v.cast::<u32>()?;
-            let tag = Tag::from_bytes_lossy(k.as_bytes());
-            Ok((tag, num))
-        })
+        .enumerate()
+        .map(|(i, (k, v))| Ok((
+            k.clone().into_value().cast::<Tag>().hint(tag_hint_helper(i, &k))?,
+            v.cast::<u32>().hint(tag_hint_helper(i, &k))?
+        )))
         .collect::<HintedStrResult<_>>()?),
+}
+
+fn tag_hint_helper(index: usize, key: &impl Repr) -> EcoString {
+    eco_format!("occurred in tag at index {index} (`{}`)", key.repr())
 }
 
 impl Fold for FontFeatures {
@@ -1246,8 +1348,9 @@ pub fn features(styles: StyleChain) -> Vec<Feature> {
         }
     }
 
-    if styles.get(TextElem::alternates) {
-        feat(b"salt", 1);
+    match styles.get(TextElem::alternates).0 {
+        0 => {}
+        v => feat(b"salt", v),
     }
 
     for set in styles.get(TextElem::stylistic_set).sets() {
@@ -1424,8 +1527,10 @@ fn check_font_list(engine: &mut Engine, list: &Spanned<FontList>) {
                 {
                     engine.sink.warn(warning!(
                         list.span,
-                        "variable fonts are not currently supported and may render incorrectly";
-                        hint: "try installing a static version of \"{}\" instead", family.as_str()
+                        "variable fonts are not currently supported and may render \
+                         incorrectly";
+                        hint: "try installing a static version of \"{}\" instead",
+                            family.as_str();
                     ))
                 }
             }
@@ -1445,5 +1550,37 @@ mod tests {
     #[test]
     fn test_text_elem_size() {
         assert_eq!(std::mem::size_of::<TextElem>(), std::mem::size_of::<EcoString>());
+    }
+
+    #[test]
+    fn test_text_tag_parsing() {
+        let tag = |v: &[u8]| {
+            std::str::from_utf8(v)
+                .unwrap()
+                .into_value()
+                .cast::<Tag>()
+                .map_or(None, |v| Some(v.0.to_be_bytes()))
+        };
+
+        // Valid tags; standard and padded forms.
+        assert_eq!(tag(b"feat"), Some(*b"feat"));
+        assert_eq!(tag(b"a"), Some(*b"a   "));
+
+        // Empty tag.
+        assert_eq!(tag(b""), None);
+
+        // Padding errors.
+        assert_eq!(tag(b" "), None);
+        assert_eq!(tag(b" a"), None);
+        assert_eq!(tag(b"a b"), None);
+
+        // Overlong tag.
+        assert_eq!(tag(b"foobar"), None);
+
+        // Explicit range.
+        assert_eq!(tag(&[0x19]), None);
+        assert_eq!(tag(&[0x21]), Some(*b"!   "));
+        assert_eq!(tag(&[0x7E]), Some(*b"~   "));
+        assert_eq!(tag(&[0x7F]), None);
     }
 }

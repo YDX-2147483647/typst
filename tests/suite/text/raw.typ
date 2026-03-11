@@ -1,19 +1,19 @@
 // Test raw blocks.
 
---- raw-empty ---
+--- raw-empty paged ---
 // Empty raw block.
 Empty raw block:``.
 
---- raw-consecutive-single-backticks ---
+--- raw-consecutive-single-backticks paged ---
 // No extra space.
 `A``B`
 
---- raw-typst-lang ---
+--- raw-typst-lang paged ---
 // Typst syntax inside.
 ```typ #let x = 1``` \
 ```typ #f(1)```
 
---- raw-block-no-parbreaks ---
+--- raw-block-no-parbreaks paged ---
 // Multiline block splits paragraphs.
 
 Text
@@ -22,13 +22,13 @@ fn code() {}
 ```
 Text
 
---- raw-more-backticks ---
+--- raw-more-backticks paged ---
 // Lots of backticks inside.
 ````
 ```backticks```
 ````
 
---- raw-trimming ---
+--- raw-trimming paged ---
 // Trimming.
 
 // Space between "rust" and "let" is trimmed.
@@ -41,18 +41,18 @@ The keyword ```rust let```.
 (``` trimmed ```) \
 (``` trimmed```) \
 
---- raw-single-backtick-lang ---
+--- raw-single-backtick-lang paged ---
 // Single ticks should not have a language.
 `rust let`
 
---- raw-dedent-first-line ---
+--- raw-dedent-first-line paged ---
 // First line is not dedented and leading space is still possible.
      ```   A
         B
        C
      ```
 
---- raw-dedent-empty-line ---
+--- raw-dedent-empty-line paged ---
 // Do not take empty lines into account when computing dedent.
 ```
         A
@@ -60,7 +60,7 @@ The keyword ```rust let```.
         B
 ```
 
---- raw-dedent-last-line ---
+--- raw-dedent-last-line paged ---
 // Take last line into account when computing dedent.
 ```
         A
@@ -68,7 +68,7 @@ The keyword ```rust let```.
         B
     ```
 
---- raw-tab-size ---
+--- raw-tab-size paged ---
 #set raw(tab-size: 8)
 
 ```tsv
@@ -78,7 +78,7 @@ Year	Month	Day
 2002	3	10
 ```
 
---- raw-syntaxes ---
+--- raw-syntaxes paged ---
 #set page(width: 180pt)
 #set text(6pt)
 #set raw(syntaxes: "/assets/syntaxes/SExpressions.sublime-syntax")
@@ -91,8 +91,44 @@ Year	Month	Day
     (* x (factorial (- x 1)))))
 ```
 
+--- raw-syntaxes-invalid-sublime-syntax eval ---
+// Prevent test parser from failing on "^---" line.
+#let sublime-syntax = ```yaml
+%YAML 1.2
+```.text + "\n---\n" + ```yaml
+name: lang
+file_extensions:
+  - a
+scope: source
+contexts:
+  main:
+    - match: '\'
+```.text
 
---- raw-theme ---
+// Error: 35-56 failed to parse syntax (Error while compiling regex '\': Parsing error at position 0: Backslash without following character)
+#raw("text", lang: "a", syntaxes: bytes(sublime-syntax))
+
+--- raw-syntaxes-types paged empty ---
+#let sublime-syntax = ```yaml
+%YAML 1.2
+```.text + "\n---\n" + ```yaml
+name: lang
+file_extensions:
+  - a
+scope: source
+contexts:
+  main:
+    - match: ''
+```.text
+
+#set raw(syntaxes: "/assets/syntaxes/SExpressions.sublime-syntax")
+#set raw(syntaxes: path("/assets/syntaxes/SExpressions.sublime-syntax"))
+#set raw(syntaxes: (
+  path("/assets/syntaxes/SExpressions.sublime-syntax"),
+  bytes(sublime-syntax),
+))
+
+--- raw-theme paged ---
 // Test code highlighting with custom theme.
 #set page(width: 180pt)
 #set text(6pt)
@@ -116,12 +152,12 @@ Year	Month	Day
 #show heading: emph
 ```
 
---- raw-show-set ---
+--- raw-show-set paged ---
 // Text show rule
 #show raw: set text(font: "Roboto")
 `Roboto`
 
---- raw-align-default ---
+--- raw-align-default paged ---
 // Text inside raw block should be unaffected by outer alignment by default.
 #set align(center)
 #set page(width: 180pt)
@@ -135,7 +171,7 @@ a = 342395823859823958329
 b = 324923
 ```
 
---- raw-align-specified ---
+--- raw-align-specified paged ---
 // Text inside raw block should follow the specified alignment.
 #set page(width: 180pt)
 #set text(6pt)
@@ -147,11 +183,11 @@ b = 324923
   "#let f(x) = x\n#align(center, line(length: 1em))",
 ))
 
---- raw-align-invalid ---
+--- raw-align-invalid eval ---
 // Error: 17-20 expected `start`, `left`, `center`, `right`, or `end`, found top
 #set raw(align: top)
 
---- raw-inline-multiline ---
+--- raw-inline-multiline paged ---
 #set page(width: 180pt)
 #set text(6pt)
 #set raw(lang:"python")
@@ -166,18 +202,25 @@ for i in range(10):
   print(i)
 ` or otherwise e.g. `print(j)`, are colored properly.
 
---- raw-highlight-typ ---
+--- raw-highlight-typ paged ---
+// Highlighting for Typst markup
+#set page(width: auto)
 ```typ
-= Chapter 1
+#set heading(numbering: "1.")
+= Chapter 1 <chap:1>
 #lorem(100)
 
 #let hi = "Hello World"
 #show heading: emph
+/ Chap: @chap:1[Chapter #hi]
+- *Chap:* ch--ap
++ _*Chap:*_ ch~ap
+1. _Chap:_ ch---ap
 ```
 
---- raw-highlight-typc ---
+--- raw-highlight-typc paged ---
+// Highlighting for Typst code
 #set page(width: auto)
-
 ```typ
 #set hello()
 #set hello()
@@ -204,28 +247,50 @@ for i in range(10):
 #if foo []
 ```
 
---- raw-highlight-typm ---
+--- raw-highlight-typm paged ---
+// Highlighting for Typst math
 #set page(width: auto)
 ```typm
 1 + 2/3
-a^b
+sum_(i=1)^n i = (n(n+1))/2
+binom(n, k) = n!/(k!(n - k)!)
+2 / √(2pi) = sqrt(2) / √pi
+3 * (1 - 2) <= #(3 * (1 + 2))
+((a+b))/((c)^(d')_(e')_(f)'/(g)'/(h)!)
+[\(a+b\)]/{\(c\)^[d']_{e'}_[|f|]'/[g]'/[\|h\|]!}
+f_zeta(x), f_zeta(x)/1, f_zeta (x)
+pi.alt + pi^arrow.l.long.double - π = ???
+"string" - + * ::= & \
+|=> & [|define(x-y_z: #1, x::= y; xyz; 0)|]
+std.text(op("Red"), fill: red)
+#std.text(math.op("Red"), fill: red)
+```
+
+--- raw-highlight-typm-idents paged ---
+// Highlighting identifiers, field accesses and function calls in math
+#set page(width: auto)
+```typm
 hello
+hello-world
 hello()
 box[]
 hello.world
 hello.world()
+hello-world()
+hello_world()
 hello.my.world()
-f_(zeta(x)), f_(zeta(x))/1
 emph(hello.my.world())
 emph(hello.my().world)
 emph(hello.my().world())
+emph (hello.my().world())
 #hello
 #hello()
 #hello.world
 #hello.world()
 #box[]
 ```
---- raw-highlight-rust ---
+
+--- raw-highlight-rust paged ---
 #set page(width: auto)
 
 ```rust
@@ -238,7 +303,7 @@ fn advance(state: State<'_>) -> State<'_> {
 }
 ```
 
---- raw-highlight-py ---
+--- raw-highlight-py paged ---
 #set page(width: auto)
 
 ```py
@@ -248,7 +313,7 @@ def hi():
   print("Hi!")
 ```
 
---- raw-highlight-cpp ---
+--- raw-highlight-cpp paged ---
 #set page(width: auto)
 
 ```cpp
@@ -259,7 +324,7 @@ int main() {
 }
 ```
 
---- raw-highlight-html ---
+--- raw-highlight-html paged ---
 #set page(width: auto)
 
 ```html
@@ -280,7 +345,22 @@ int main() {
 </html>
 ```
 
---- raw-blocky ---
+--- raw-highlight-html-jinja2 paged ---
+#set page(width: auto)
+
+```html.j2
+<tbody>
+  {% for row in data.rows %}
+  <tr>
+      {% for column in row %}
+      <td>{{ column }}</td>
+      {% endfor %}
+  </tr>
+  {% endfor %}
+</tbody>
+```
+
+--- raw-blocky eval ---
 // Test various raw parsing edge cases.
 
 #let empty = (
@@ -490,14 +570,16 @@ test
 --- raw-html html ---
 This is ```typ *inline*```.
 ```typ
-#set text(blue)
-*Hello* _world_!
+#[
+  #set text(blue)
+  *Hello* _world_!
+]
 ```
 
 --- raw-html-inline-spaces html ---
 This has `double  spaces  inside`, which should be kept.
 
---- raw-line ---
+--- raw-line paged ---
 #set page(width: 200pt)
 
 ```rs
@@ -521,7 +603,7 @@ fn main() {
 }
 ```
 
---- raw-line-alternating-fill ---
+--- raw-line-alternating-fill paged ---
 #set page(width: 200pt)
 #show raw: it => stack(dir: ttb, ..it.lines)
 #show raw.line: it => {
@@ -552,7 +634,7 @@ Hello, world!
 = A heading for good measure
 ```
 
---- raw-line-text-fill ---
+--- raw-line-text-fill paged ---
 #set page(width: 200pt)
 #show raw.line: set text(fill: red)
 
@@ -569,7 +651,7 @@ print(x)
 print(y)
 ```
 
---- raw-line-scripting ---
+--- raw-line-scripting paged empty ---
 
 // Test line extraction works.
 
@@ -604,12 +686,12 @@ print(x)
 print(y)
 ```
 
---- issue-3601-empty-raw ---
+--- issue-3601-empty-raw paged ---
 // Test that empty raw block with `typ` language doesn't cause a crash.
 ```typ
 ```
 
---- raw-empty-lines ---
+--- raw-empty-lines paged ---
 // Test raw with multiple empty lines.
 
 #show raw: block.with(width: 100%, fill: gray)
@@ -621,7 +703,7 @@ print(y)
 
 ```
 
---- issue-3841-tabs-in-raw-type-code ---
+--- issue-3841-tabs-in-raw-type-code paged ---
 // Tab chars were not rendered in raw blocks with lang: "typ(c)"
 #raw("#if true {\n\tf()\t// typ\n}", lang: "typ")
 
@@ -641,11 +723,25 @@ if true {
 }
 ```
 
---- issue-4662-math-mode-language-for-raw ---
+--- issue-6961-tab-crlf-raw-indent paged ---
+#let snippet = (
+  ```
+  A
+    BC
+    D
+  ```
+)
+
+#raw(
+  snippet.text.replace("  ", "\t").replace("\n", "\r\n"),
+  block: true,
+)
+
+--- issue-4662-math-mode-language-for-raw paged ---
 // Test lang: "typm" syntax highlighting without enclosing dollar signs
 #raw("pi^2", lang: "typm")
 
---- issue-2259-raw-color-overwrite ---
+--- issue-2259-raw-color-overwrite paged ---
 // Test that the color of a raw block is not overwritten
 #show raw: set text(fill: blue)
 
@@ -657,7 +753,7 @@ fn main() {
 }
 ```
 
---- issue-3191-raw-justify ---
+--- issue-3191-raw-justify paged ---
 // Raw blocks should not be justified by default.
 ```
 a b c --------------------
@@ -668,7 +764,7 @@ a b c --------------------
 a b c --------------------
 ```
 
---- issue-3191-raw-normal-paragraphs-still-shrink ---
+--- issue-3191-raw-normal-paragraphs-still-shrink paged ---
 // In normal paragraphs, spaces should still be shrunk.
 // The first line here serves as a reference, while the second
 // uses non-breaking spaces to create an overflowing line
@@ -677,7 +773,7 @@ a b c --------------------
 
 ~~~~The~spaces~on~this~line~shrink
 
---- issue-3820-raw-space-when-end-with-backtick ---
+--- issue-3820-raw-space-when-end-with-backtick paged ---
 ```typ
 `code`
 ```
@@ -686,7 +782,7 @@ a b c --------------------
   `code`
   ```
 
---- issue-5760-disable-cjk-latin-spacing-in-raw ---
+--- issue-5760-disable-cjk-latin-spacing-in-raw paged ---
 
 ```typ
 #let hi = "你好world"
@@ -697,17 +793,17 @@ a b c --------------------
 #let hi = "你好world"
 ```
 
---- issue-6559-equality-between-raws ---
+--- issue-6559-equality-between-raws eval ---
 
 #test(`foo`, `foo`)
 #assert.ne(`foo`, `bar`)
 
---- raw-theme-set-to-auto ---
+--- raw-theme-types paged ---
 ```typ
 #let hi = "Hello World"
 ```
 
-#set raw(theme: "/assets/themes/halcyon.tmTheme")
+#set raw(theme: path("/assets/themes/halcyon.tmTheme"))
 ```typ
 #let hi = "Hello World"
 ```
@@ -717,17 +813,49 @@ a b c --------------------
 #let hi = "Hello World"
 ```
 
---- raw-theme-set-to-none ---
+--- raw-theme-set-to-none paged ---
 #set raw(theme: none)
 ```typ
 #let foo = "bar"
 ```
 
---- raw-unclosed ---
+--- raw-default-json-theme paged ---
+```json
+{
+  "foo": "bar",
+  "test": [
+    "test",
+    true,
+    42,
+    5.0,
+    null
+  ],
+  "hi": {
+    "this": "is a test!",
+    "What is this?": "This is incredible text!"
+  }
+}
+```
+
+--- raw-default-yaml-theme paged ---
+```yaml
+foo: bar
+test:
+- test
+- true
+- 42
+- 5
+-
+hi:
+  this: is a test!
+  What is this?: This is incredible text!
+```
+
+--- raw-unclosed eval ---
 // Test unterminated raw text.
 //
 // Note: This test should be the final one in the file because it messes up
 // syntax highlighting.
 //
-// Error: 1-2:1 unclosed raw text
+// Error: 1:1-2:1 unclosed raw text
 `endless

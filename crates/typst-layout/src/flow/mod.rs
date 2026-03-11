@@ -26,9 +26,10 @@ use typst_library::layout::{
     Regions, Rel, Size,
 };
 use typst_library::model::{FootnoteElem, FootnoteEntry, LineNumberingScope, ParLine};
+use typst_library::pdf::ArtifactKind;
 use typst_library::routines::{Arenas, FragmentKind, Pair, RealizationKind, Routines};
 use typst_library::text::TextElem;
-use typst_utils::{NonZeroExt, Numeric};
+use typst_utils::{NonZeroExt, Numeric, Protected};
 
 use self::block::{layout_multi_block, layout_single_block};
 use self::collect::{
@@ -62,7 +63,7 @@ pub fn layout_fragment(
     layout_fragment_impl(
         engine.routines,
         engine.world,
-        engine.introspector,
+        engine.introspector.into_raw(),
         engine.traced,
         TrackedMut::reborrow_mut(&mut engine.sink),
         engine.route.track(),
@@ -90,7 +91,7 @@ pub fn layout_columns(
     layout_fragment_impl(
         engine.routines,
         engine.world,
-        engine.introspector,
+        engine.introspector.into_raw(),
         engine.traced,
         TrackedMut::reborrow_mut(&mut engine.sink),
         engine.route.track(),
@@ -127,6 +128,7 @@ fn layout_fragment_impl(
         bail!(content.span(), "cannot expand into infinite height");
     }
 
+    let introspector = Protected::from_raw(introspector);
     let link = LocatorLink::new(locator);
     let mut locator = Locator::link(&link).split();
     let mut engine = Engine {
@@ -255,7 +257,9 @@ fn configuration<'x>(
             ColumnConfig { count, width, gutter, dir }
         },
         footnote: FootnoteConfig {
-            separator: shared.get_cloned(FootnoteEntry::separator),
+            separator: shared
+                .get_cloned(FootnoteEntry::separator)
+                .artifact(ArtifactKind::Other),
             clearance: shared.resolve(FootnoteEntry::clearance),
             gap: shared.resolve(FootnoteEntry::gap),
             expand: regions.expand.x,

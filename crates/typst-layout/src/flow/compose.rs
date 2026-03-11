@@ -8,8 +8,8 @@ use typst_library::introspection::{
     SplitLocator, Tag,
 };
 use typst_library::layout::{
-    Abs, Axes, Dir, FixedAlignment, Fragment, Frame, FrameItem, OuterHAlignment,
-    PlacementScope, Point, Region, Regions, Rel, Size,
+    Abs, Axes, Dir, FixedAlignment, Fragment, Frame, FrameItem, FrameParent, Inherit,
+    OuterHAlignment, PlacementScope, Point, Region, Regions, Rel, Size,
 };
 use typst_library::model::{
     FootnoteElem, FootnoteEntry, LineNumberingScope, Numbering, ParLineMarker,
@@ -361,7 +361,7 @@ impl<'a, 'b> Composer<'a, 'b, '_, '_> {
         // Search for footnotes.
         let mut notes = vec![];
         for tag in &self.work.tags {
-            let Tag::Start(elem) = tag else { continue };
+            let Tag::Start(elem, _) = tag else { continue };
             let Some(note) = elem.to_packed::<FootnoteElem>() else { continue };
             notes.push((Abs::zero(), note.clone()));
         }
@@ -601,14 +601,19 @@ fn layout_footnote(
     let loc = elem.location().unwrap();
     crate::layout_fragment(
         engine,
-        &FootnoteEntry::new(elem.clone()).pack(),
+        &FootnoteEntry::new(elem.clone())
+            .pack()
+            .spanned(elem.span())
+            // We attach a well-known derived location to the entry so that the
+            // note can link to this entry without first querying for it.
+            .located(loc.variant(1)),
         Locator::synthesize(loc),
         config.shared,
         pod,
     )
     .map(|mut fragment| {
         for frame in &mut fragment {
-            frame.set_parent(loc);
+            frame.set_parent(FrameParent::new(loc, Inherit::No));
         }
         fragment
     })
@@ -663,7 +668,7 @@ impl<'a, 'b> Insertions<'a, 'b> {
         self.footnote_separator = Some(frame);
     }
 
-    /// The combined height of the top and bottom area (includings clearances).
+    /// The combined height of the top and bottom area (including clearances).
     /// Subtracting this from the total region size yields the available space
     /// for distribution.
     fn height(&self) -> Abs {
@@ -930,7 +935,7 @@ fn find_in_frame_impl<T: NativeElement>(
         let y = y_offset + pos.y;
         match item {
             FrameItem::Group(group) => find_in_frame_impl(output, &group.frame, y),
-            FrameItem::Tag(Tag::Start(elem)) => {
+            FrameItem::Tag(Tag::Start(elem, _)) => {
                 if let Some(elem) = elem.to_packed::<T>() {
                     output.push((y, elem.clone()));
                 }

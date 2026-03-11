@@ -42,7 +42,7 @@ use crate::text::{Lang, Region, TextElem};
 /// This function indirectly has dedicated syntax. [References]($ref) can be
 /// used to cite works from the bibliography. The label then corresponds to the
 /// citation key.
-#[elem(Synthesize)]
+#[elem(Locatable, Synthesize)]
 pub struct CiteElem {
     /// The citation key that identifies the entry in the bibliography that
     /// shall be cited, as a label.
@@ -95,12 +95,11 @@ pub struct CiteElem {
     /// - A string with the name of one of the built-in styles (see below). Some
     ///   of the styles listed below appear twice, once with their full name and
     ///   once with a short alias.
-    /// - A path string to a [CSL file](https://citationstyles.org/). For more
-    ///   details about paths, see the [Paths section]($syntax/#paths).
+    /// - A path string or [`path`] to a [CSL file](https://citationstyles.org/).
     /// - Raw bytes from which a CSL style should be decoded.
     #[parse(match args.named::<Spanned<Smart<CslSource>>>("style")? {
         Some(Spanned { v: Smart::Custom(source), span }) => Some(Smart::Custom(
-            CslStyle::load(engine.world, Spanned::new(source, span))?
+            CslStyle::load(engine, Spanned::new(source, span))?
         )),
         Some(Spanned { v: Smart::Auto, .. }) => Some(Smart::Auto),
         None => None,
@@ -163,8 +162,7 @@ impl Packed<CiteGroup> {
     pub fn realize(&self, engine: &mut Engine) -> SourceResult<Content> {
         let location = self.location().unwrap();
         let span = self.span();
-        Works::generate(engine)
-            .at(span)?
+        Works::generate(engine, span)?
             .citations
             .get(&location)
             .cloned()
@@ -179,6 +177,6 @@ fn failed_to_format_citation() -> HintedString {
     error!(
         "cannot format citation in isolation";
         hint: "check whether this citation is measured \
-               without being inserted into the document"
+               without being inserted into the document";
     )
 }

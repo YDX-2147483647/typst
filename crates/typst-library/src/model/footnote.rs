@@ -1,18 +1,21 @@
 use std::num::NonZeroUsize;
 use std::str::FromStr;
 
+use ecow::{EcoString, eco_format};
 use typst_utils::NonZeroExt;
 
-use crate::diag::{StrResult, bail};
+use crate::diag::{At, SourceResult, StrResult, bail};
 use crate::engine::Engine;
 use crate::foundations::{
     Content, Label, NativeElement, Packed, ShowSet, Smart, StyleChain, Styles, cast,
     elem, scope,
 };
-use crate::introspection::{Count, CounterUpdate, Locatable, Location};
+use crate::introspection::{
+    Count, Counter, CounterUpdate, Locatable, Location, QueryLabelIntrospection, Tagged,
+};
 use crate::layout::{Abs, Em, Length, Ratio};
-use crate::model::{Numbering, NumberingPattern, ParElem};
-use crate::text::{TextElem, TextSize};
+use crate::model::{DirectLinkElem, Numbering, NumberingPattern, ParElem};
+use crate::text::{LocalName, SuperElem, TextElem, TextSize};
 use crate::visualize::{LineElem, Stroke};
 
 /// A footnote.
@@ -23,10 +26,10 @@ use crate::visualize::{LineElem, Stroke};
 /// and can break across multiple pages.
 ///
 /// To customize the appearance of the entry in the footnote listing, see
-/// [`footnote.entry`]($footnote.entry). The footnote itself is realized as a
-/// normal superscript, so you can use a set rule on the [`super`] function to
-/// customize it. You can also apply a show rule to customize only the footnote
-/// marker (superscript number) in the running text.
+/// [`footnote.entry`]. The footnote itself is realized as a normal superscript,
+/// so you can use a set rule on the [`super`] function to customize it. You can
+/// also apply a show rule to customize only the footnote marker (superscript
+/// number) in the running text.
 ///
 /// # Example
 /// ```example
@@ -50,10 +53,16 @@ use crate::visualize::{LineElem, Stroke};
 /// _Note:_ Set and show rules in the scope where `footnote` is called may not
 /// apply to the footnote's content. See [here][issue] for more information.
 ///
+/// # Accessibility
+/// Footnotes will be read by Assistive Technology (AT) immediately after the
+/// spot in the text where they are referenced, just like how they appear in
+/// markup.
+///
 /// [issue]: https://github.com/typst/typst/issues/1467#issuecomment-1588799440
-#[elem(scope, Locatable, Count)]
+#[elem(scope, Locatable, Tagged, Count)]
 pub struct FootnoteElem {
-    /// How to number footnotes.
+    /// How to number footnotes. Accepts a
+    /// [numbering pattern or function]($numbering) taking a single number.
     ///
     /// By default, the footnote numbering continues throughout your document.
     /// If you prefer per-page footnote numbering, you can reset the footnote
@@ -82,7 +91,16 @@ impl FootnoteElem {
     type FootnoteEntry;
 }
 
+impl LocalName for Packed<FootnoteElem> {
+    const KEY: &'static str = "footnote";
+}
+
 impl FootnoteElem {
+    pub fn alt_text(styles: StyleChain, num: &str) -> EcoString {
+        let local_name = Packed::<FootnoteElem>::local_name_in(styles);
+        eco_format!("{local_name} {num}")
+    }
+
     /// Creates a new footnote that the passed content as its body.
     pub fn with_content(content: Content) -> Self {
         Self::new(FootnoteBody::Content(content))
@@ -117,11 +135,29 @@ impl FootnoteElem {
 }
 
 impl Packed<FootnoteElem> {
+    /// Returns the content that holds the number and links to the
+    /// footnote entry.
+    pub fn realize(
+        &self,
+        engine: &mut Engine,
+        styles: StyleChain,
+    ) -> SourceResult<Content> {
+        let span = self.span();
+        let loc = self.declaration_location(engine).at(span)?;
+        let numbering = self.numbering.get_ref(styles);
+        let counter = Counter::of(FootnoteElem::ELEM);
+        let num = counter.display_at(engine, loc, styles, numbering, span)?;
+        let alt = FootnoteElem::alt_text(styles, &num.plain_text());
+        let dest = loc.variant(1);
+        Ok(DirectLinkElem::new(dest, num, Some(alt)).pack().spanned(span))
+    }
+
     /// Returns the location of the definition of this footnote.
-    pub fn declaration_location(&self, engine: &Engine) -> StrResult<Location> {
+    pub fn declaration_location(&self, engine: &mut Engine) -> StrResult<Location> {
         match self.body {
             FootnoteBody::Reference(label) => {
-                let element = engine.introspector.query_label(label)?;
+                let element =
+                    engine.introspect(QueryLabelIntrospection(label, self.span()))?;
                 let footnote = element
                     .to_packed::<FootnoteElem>()
                     .ok_or("referenced element should be a footnote")?;
@@ -176,7 +212,7 @@ cast! {
 /// page run is a sequence of pages without an explicit pagebreak in between).
 /// For this reason, set and show rules for footnote entries should be defined
 /// before any page content, typically at the very start of the document.
-#[elem(name = "entry", title = "Footnote Entry", ShowSet)]
+#[elem(name = "entry", title = "Footnote Entry", Locatable, Tagged, ShowSet)]
 pub struct FootnoteEntry {
     /// The footnote for this entry. Its location can be used to determine
     /// the footnote counter state.
@@ -184,10 +220,7 @@ pub struct FootnoteEntry {
     /// ```example
     /// #show footnote.entry: it => {
     ///   let loc = it.note.location()
-    ///   numbering(
-    ///     "1: ",
-    ///     ..counter(footnote).at(loc),
-    ///   )
+    ///   counter(footnote).display(at: loc, "1: ")
     ///   it.note.body
     /// }
     ///
@@ -259,6 +292,35 @@ pub struct FootnoteEntry {
     pub indent: Length,
 }
 
+impl Packed<FootnoteEntry> {
+    /// Returns the content of the superscript that holds the number and links
+    /// back to the footnote, and the entry body.
+    pub fn realize(
+        &self,
+        engine: &mut Engine,
+        styles: StyleChain,
+    ) -> SourceResult<(Content, Content)> {
+        let span = self.span();
+        let default = StyleChain::default();
+        let numbering = self.note.numbering.get_ref(default);
+        let counter = Counter::of(FootnoteElem::ELEM);
+        let Some(dest) = self.note.location() else {
+            bail!(
+                self.span(), "footnote entry must have a location";
+                hint: "try using a query or a show rule to customize the footnote instead";
+            );
+        };
+
+        let num = counter.display_at(engine, dest, styles, numbering, span)?;
+        let alt = num.plain_text();
+        let link = DirectLinkElem::new(dest, num, Some(alt)).pack().spanned(span);
+        let sup = SuperElem::new(link).pack().spanned(span);
+        let body = self.note.body_content().unwrap().clone();
+
+        Ok((sup, body))
+    }
+}
+
 impl ShowSet for Packed<FootnoteEntry> {
     fn show_set(&self, _: StyleChain) -> Styles {
         let mut out = Styles::new();
@@ -272,3 +334,10 @@ cast! {
     FootnoteElem,
     v: Content => v.unpack::<Self>().unwrap_or_else(Self::with_content)
 }
+
+/// This is an empty element inserted by the HTML footnote rule to indicate the
+/// presence of the default footnote rule. It's only used by the error in
+/// `FootnoteContainer::unsupported_with_custom_dom` and could be removed if
+/// that's not needed anymore.
+#[elem(Locatable)]
+pub struct FootnoteMarker {}

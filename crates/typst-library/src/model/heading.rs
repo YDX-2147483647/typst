@@ -8,7 +8,7 @@ use crate::engine::Engine;
 use crate::foundations::{
     Content, NativeElement, Packed, ShowSet, Smart, StyleChain, Styles, Synthesize, elem,
 };
-use crate::introspection::{Count, Counter, CounterUpdate, Locatable};
+use crate::introspection::{Count, Counter, CounterUpdate, Locatable, Tagged};
 use crate::layout::{BlockElem, Em, Length};
 use crate::model::{Numbering, Outlinable, Refable, Supplement};
 use crate::text::{FontWeight, LocalName, TextElem, TextSize};
@@ -18,8 +18,9 @@ use crate::text::{FontWeight, LocalName, TextElem, TextSize};
 /// With headings, you can structure your document into sections. Each heading
 /// has a _level,_ which starts at one and is unbounded upwards. This level
 /// indicates the logical role of the following content (section, subsection,
-/// etc.) A top-level heading indicates a top-level section of the document
-/// (not the document's title).
+/// etc.) A top-level heading indicates a top-level section of the document (not
+/// the document's title). To insert a title, use the [`title`]($title) element
+/// instead.
 ///
 /// Typst can automatically number your headings for you. To enable numbering,
 /// specify how you want your headings to be numbered with a
@@ -28,6 +29,13 @@ use crate::text::{FontWeight, LocalName, TextElem, TextSize};
 /// Independently of the numbering, Typst can also automatically generate an
 /// [outline] of all headings for you. To exclude one or more headings from this
 /// outline, you can set the `outlined` parameter to `{false}`.
+///
+/// When writing a [show rule]($styling/#show-rules) that accesses the
+/// [`body` field]($heading.body) to create a completely custom look for
+/// headings, make sure to wrap the content in a [`block`]($block) (which is
+/// implicitly [sticky]($block.sticky) for headings through a built-in show-set
+/// rule). This prevents headings from becoming "orphans", i.e. remaining
+/// at the end of the page with the following content being on the next page.
 ///
 /// # Example
 /// ```example
@@ -45,7 +53,28 @@ use crate::text::{FontWeight, LocalName, TextElem, TextSize};
 /// one or multiple equals signs, followed by a space. The number of equals
 /// signs determines the heading's logical nesting depth. The `{offset}` field
 /// can be set to configure the starting depth.
-#[elem(Locatable, Synthesize, Count, ShowSet, LocalName, Refable, Outlinable)]
+///
+/// # Accessibility
+/// Headings are important for accessibility, as they help users of Assistive
+/// Technologies (AT) like screen readers to navigate within your document.
+/// Screen reader users will be able to skip from heading to heading, or get an
+/// overview of all headings in the document.
+///
+/// To make your headings accessible, you should not skip heading levels. This
+/// means that you should start with a first-level heading. Also, when the
+/// previous heading was of level 3, the next heading should be of level 3
+/// (staying at the same depth), level 4 (going exactly one level deeper), or
+/// level 1 or 2 (new hierarchically higher headings).
+///
+/// # HTML export
+/// As mentioned above, a top-level heading indicates a top-level section of
+/// the document rather than its title. This is in contrast to the HTML `<h1>`
+/// element of which there should be only one per document.
+///
+/// For this reason, in HTML export, a [`title`] element will turn into an
+/// `<h1>` and headings turn into `<h2>` and lower (a level 1 heading thus turns
+/// into `<h2>`, a level 2 heading into `<h3>`, etc).
+#[elem(Locatable, Tagged, Synthesize, Count, ShowSet, LocalName, Refable, Outlinable)]
 pub struct HeadingElem {
     /// The absolute nesting depth of the heading, starting from one. If set
     /// to `{auto}`, it is computed from `{offset + depth}`.
@@ -93,7 +122,7 @@ pub struct HeadingElem {
     pub offset: usize,
 
     /// How to number the heading. Accepts a
-    /// [numbering pattern or function]($numbering).
+    /// [numbering pattern or function]($numbering) taking multiple numbers.
     ///
     /// ```example
     /// #set heading(numbering: "1.a.")
@@ -177,12 +206,16 @@ pub struct HeadingElem {
 
     /// The indent all but the first line of a heading should have.
     ///
-    /// The default value of `{auto}` indicates that the subsequent heading
-    /// lines will be indented based on the width of the numbering.
+    /// The default value of `{auto}` uses the width of the numbering as indent
+    /// if the heading is aligned at the [start]($direction.start) of the [text
+    /// direction]($text.dir), and no indent for center and other alignments.
     ///
     /// ```example
     /// #set heading(numbering: "1.")
-    /// #heading[A very, very, very, very, very, very long heading]
+    /// = A very, very, very, very, very, very long heading
+    ///
+    /// #show heading: set align(center)
+    /// == A very long heading\ with center alignment
     /// ```
     #[default(Smart::Auto)]
     pub hanging_indent: Smart<Length>,
@@ -217,12 +250,20 @@ impl Synthesize for Packed<HeadingElem> {
 
         if let Some((numbering, location)) =
             self.numbering.get_ref(styles).as_ref().zip(self.location())
+            // We are not early returning on error here because of
+            // https://github.com/typst/typst/issues/7428
+            //
+            // A more comprehensive fix might introduce the error catching logic
+            // of show rules for synthesis, too.
+            && let Ok(numbers) = self.counter().display_at(
+                engine,
+                location,
+                styles,
+                numbering,
+                self.span(),
+            )
         {
-            self.numbers = Some(
-                self.counter()
-                    .display_at_loc(engine, location, styles, numbering)?
-                    .plain_text(),
-            );
+            self.numbers = Some(numbers.plain_text());
         }
 
         let elem = self.as_mut();

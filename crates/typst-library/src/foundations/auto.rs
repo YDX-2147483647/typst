@@ -62,9 +62,10 @@ impl Repr for AutoValue {
 }
 
 /// A value that can be automatically determined.
-#[derive(Debug, Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash)]
+#[derive(Debug, Default, Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash)]
 pub enum Smart<T> {
     /// The value should be determined smartly based on the circumstances.
+    #[default]
     Auto,
     /// A specific value.
     Custom(T),
@@ -207,9 +208,12 @@ impl<T> Smart<Smart<T>> {
     }
 }
 
-impl<T> Default for Smart<T> {
-    fn default() -> Self {
-        Self::Auto
+impl<T> From<Option<T>> for Smart<T> {
+    fn from(value: Option<T>) -> Self {
+        match value {
+            Some(v) => Smart::Custom(v),
+            None => Smart::Auto,
+        }
     }
 }
 

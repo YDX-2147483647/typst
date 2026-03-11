@@ -71,7 +71,7 @@ pub struct SmartQuoteElem {
     ///     opening and closing double quotes (characters here refer to Unicode
     ///     grapheme clusters)
     ///   - [array]: an array containing the opening and closing double quotes
-    ///   - [dictionary]: an array containing the double and single quotes, each
+    ///   - [dictionary]: a dictionary containing the double and single quotes, each
     ///     specified as either `{auto}`, string, or array
     ///
     /// ```example
@@ -89,11 +89,7 @@ pub struct SmartQuoteElem {
 
 impl PlainText for Packed<SmartQuoteElem> {
     fn plain_text(&self, text: &mut EcoString) {
-        if self.double.as_option().unwrap_or(true) {
-            text.push_str("\"");
-        } else {
-            text.push_str("'");
-        }
+        text.push_str(SmartQuotes::fallback(self.double.as_option().unwrap_or(true)));
     }
 }
 
@@ -221,7 +217,7 @@ impl<'s> SmartQuotes<'s> {
     /// Swiss / Liechtensteinian German, Estonian, Icelandic, Italian, Latin,
     /// Lithuanian, Latvian, Slovak, Slovenian, Spanish, Bosnian, Finnish,
     /// Swedish, French, Swiss French, Hungarian, Polish, Romanian, Japanese,
-    /// Traditional Chinese, Russian, Norwegian, Hebrew and Croatian.
+    /// Traditional Chinese, Russian, Norwegian, Hebrew, Galician and Croatian.
     ///
     /// For unknown languages, the English quotes are used as fallback.
     pub fn get(
@@ -235,36 +231,58 @@ impl<'s> SmartQuotes<'s> {
         let default = ("‘", "’", "“", "”");
         let low_high = ("‚", "‘", "„", "“");
 
-        let (single_open, single_close, double_open, double_close) = match lang.as_str() {
-            "de" if matches!(region, Some("CH" | "LI")) => match alternative {
+        let (single_open, single_close, double_open, double_close) = match lang {
+            Lang::GERMAN if matches!(region, Some("CH" | "LI")) => match alternative {
                 false => ("‹", "›", "«", "»"),
                 true => low_high,
             },
-            "fr" if matches!(region, Some("CH")) => match alternative {
+            Lang::FRENCH if matches!(region, Some("CH")) => match alternative {
                 false => ("‹\u{202F}", "\u{202F}›", "«\u{202F}", "\u{202F}»"),
                 true => default,
             },
-            "cs" | "da" | "de" | "sk" | "sl" if alternative => ("›", "‹", "»", "«"),
-            "cs" | "de" | "et" | "is" | "lt" | "lv" | "sk" | "sl" => low_high,
-            "da" => ("‘", "’", "“", "”"),
-            "fr" if alternative => default,
-            "fr" => ("“", "”", "«\u{202F}", "\u{202F}»"),
-            "fi" | "sv" if alternative => ("’", "’", "»", "»"),
-            "bs" | "fi" | "sv" => ("’", "’", "”", "”"),
-            "it" if alternative => default,
-            "la" if alternative => ("“", "”", "«\u{202F}", "\u{202F}»"),
-            "it" | "la" => ("“", "”", "«", "»"),
-            "es" if matches!(region, Some("ES") | None) => ("“", "”", "«", "»"),
-            "hu" | "pl" | "ro" => ("’", "’", "„", "”"),
-            "no" | "nb" | "nn" if alternative => low_high,
-            "no" | "nb" | "nn" => ("’", "’", "«", "»"),
-            "ru" => ("„", "“", "«", "»"),
-            "uk" => ("“", "”", "«", "»"),
-            "el" => ("‘", "’", "«", "»"),
-            "he" => ("’", "’", "”", "”"),
-            "hr" => ("‘", "’", "„", "”"),
-            "bg" => ("’", "’", "„", "“"),
-            "ar" if !alternative => ("’", "‘", "«", "»"),
+            Lang::CZECH
+            | Lang::DANISH
+            | Lang::GERMAN
+            | Lang::SLOVAK
+            | Lang::SLOVENIAN
+                if alternative =>
+            {
+                ("›", "‹", "»", "«")
+            }
+            Lang::CZECH
+            | Lang::GERMAN
+            | Lang::ESTONIAN
+            | Lang::ICELANDIC
+            | Lang::LITHUANIAN
+            | Lang::LATVIAN
+            | Lang::SLOVAK
+            | Lang::SLOVENIAN => low_high,
+            Lang::DANISH => ("‘", "’", "“", "”"),
+            Lang::FRENCH if alternative => default,
+            Lang::FRENCH => ("“", "”", "«\u{202F}", "\u{202F}»"),
+            Lang::FINNISH | Lang::SWEDISH if alternative => ("’", "’", "»", "»"),
+            Lang::GALICIAN => ("“", "”", "«", "»"),
+            Lang::BOSNIAN | Lang::FINNISH | Lang::SWEDISH => ("’", "’", "”", "”"),
+            Lang::ITALIAN if alternative => default,
+            Lang::LATIN if alternative => ("“", "”", "«\u{202F}", "\u{202F}»"),
+            Lang::ITALIAN | Lang::LATIN => ("“", "”", "«", "»"),
+            Lang::SPANISH if matches!(region, Some("ES") | None) => ("“", "”", "«", "»"),
+            Lang::HUNGARIAN | Lang::POLISH | Lang::ROMANIAN => ("’", "’", "„", "”"),
+            Lang::NORWEGIAN | Lang::NORWEGIAN_BOKMAL | Lang::NORWEGIAN_NYNORSK
+                if alternative =>
+            {
+                low_high
+            }
+            Lang::NORWEGIAN | Lang::NORWEGIAN_BOKMAL | Lang::NORWEGIAN_NYNORSK => {
+                ("’", "’", "«", "»")
+            }
+            Lang::RUSSIAN => ("„", "“", "«", "»"),
+            Lang::UKRAINIAN => ("“", "”", "«", "»"),
+            Lang::GREEK => ("‘", "’", "«", "»"),
+            Lang::HEBREW => ("’", "’", "”", "”"),
+            Lang::CROATIAN => ("‘", "’", "„", "”"),
+            Lang::BULGARIAN => ("’", "’", "„", "“"),
+            Lang::ARABIC if !alternative => ("’", "‘", "«", "»"),
             _ if lang.dir() == Dir::RTL => ("’", "‘", "”", "“"),
             _ => default,
         };
@@ -305,6 +323,11 @@ impl<'s> SmartQuotes<'s> {
     pub fn close(&self, double: bool) -> &'s str {
         if double { self.double_close } else { self.single_close }
     }
+
+    /// Get the fallback "dumb" quotes for when smart quotes are disabled.
+    pub fn fallback(double: bool) -> &'static str {
+        if double { "\"" } else { "'" }
+    }
 }
 
 /// An opening and closing quote.
@@ -335,7 +358,7 @@ fn str_to_set(value: &str) -> StrResult<[EcoString; 2]> {
             let count = value.graphemes(true).count();
             bail!(
                 "expected 2 characters, found {count} character{}",
-                if count > 1 { "s" } else { "" }
+                if count > 1 { "s" } else { "" },
             );
         }
     }
@@ -347,7 +370,7 @@ fn array_to_set(value: Array) -> HintedStrResult<[EcoString; 2]> {
         bail!(
             "expected 2 quotes, found {} quote{}",
             value.len(),
-            if value.len() > 1 { "s" } else { "" }
+            if value.len() > 1 { "s" } else { "" },
         );
     }
 

@@ -11,6 +11,22 @@ use crate::layout::{Length, Ratio, Rel};
 /// remaining height on the page. Support for balanced columns is planned for
 /// the future.
 ///
+/// When arranging content across multiple columns, use [`colbreak`]($colbreak)
+/// to explicitly continue in the next column.
+///
+/// # Example
+/// ```example
+/// #columns(2, gutter: 8pt)[
+///   This text is in the
+///   first column.
+///
+///   #colbreak()
+///
+///   This text is in the
+///   second column.
+/// ]
+/// ```
+///
 /// # Page-level columns { #page-level }
 /// If you need to insert columns across your whole document, use the `{page}`
 /// function's [`columns` parameter]($page.columns) instead. This will create
@@ -19,7 +35,7 @@ use crate::layout::{Length, Ratio, Rel};
 /// [pagebreaks]($pagebreak), [footnotes]($footnote), and [line
 /// numbers]($par.line) will continue to work as expected. For more information,
 /// also read the [relevant part of the page setup
-/// guide]($guides/page-setup-guide/#columns).
+/// guide]($guides/page-setup/#columns).
 ///
 /// # Breaking out of columns { #breaking-out }
 /// To temporarily break out of columns (e.g. for a paper's title), use

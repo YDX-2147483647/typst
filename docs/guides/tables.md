@@ -4,7 +4,7 @@ description: |
   explains all you need to know about tables in Typst.
 ---
 
-# Table guide
+# Table Guide
 Tables are a great way to present data to your readers in an easily readable,
 compact, and organized manner. They are not only used for numerical values, but
 also survey responses, task planning, schedules, and more. Because of this wide
@@ -65,9 +65,9 @@ top to bottom. It will automatically add enough rows to your table so that it
 fits all of your content.
 
 It is best to wrap the header row of your table in the [`table.header`
-function]($table.header). This clarifies your intent and will also allow future
-versions of Typst to make the output more accessible to users with a screen
-reader:
+function]($table.header). This clarifies your intent and will also allow Typst
+to make the output more [accessible]($guides/accessibility) to users with a
+screen reader:
 
 ```example
 #table(
@@ -257,7 +257,7 @@ Let's start with an example of a horizontally striped table:
 
 #set table(
   fill: (rgb("EAF2F5"), none),
-  stroke: frame(rgb("21222C")),
+  stroke: frame(1pt + rgb("21222C")),
 )
 
 #table(
@@ -303,7 +303,7 @@ horizontal stripes instead:
 >>>
 #set table(
   fill: (_, y) => if calc.odd(y) { rgb("EAF2F5") },
-  stroke: frame(rgb("21222C")),
+  stroke: frame(1pt + rgb("21222C")),
 )
 >>>
 >>> #table(
@@ -346,7 +346,7 @@ something like this:
 >>>
 #set table(
   fill: (_, y) => (none, rgb("EAF2F5"), rgb("DDEAEF")).at(calc.rem(y, 3)),
-  stroke: frame(rgb("21222C")),
+  stroke: frame(1pt + rgb("21222C")),
 )
 >>>
 >>> #table(
@@ -543,9 +543,9 @@ If you want more fine-grained control of where lines get placed in your table,
 you can also pass a dictionary with the keys `top`, `left`, `right`, `bottom`
 (controlling the respective cell sides), `x`, `y` (controlling vertical and
 horizontal strokes), and `rest` (covers all strokes not styled by other
-dictionary entries). All keys are optional; omitted keys will be treated as if
-their value was the default value. For example, to get a table with only
-horizontal lines, you can do this:
+dictionary entries). All keys are optional; omitted keys will use their
+previously set value, or the default value if never set. For example, to get a
+table with only horizontal lines, you can do this:
 
 ```example
 #table(
@@ -560,7 +560,7 @@ horizontal lines, you can do this:
 ```
 
 This turns off all vertical strokes and leaves the horizontal strokes in place.
-To achieve the reverse effect (only horizontal strokes), set the stroke argument
+To achieve the reverse effect (only vertical strokes), set the stroke argument
 to `{(y: none)}` instead.
 
 [Further down in the guide](#stroke-functions), we cover how to use a function
@@ -671,7 +671,7 @@ one intersection highlighted.
   columns: 3,
   stroke: (x: none),
 
-  [], [*High Neuroticism*], [*Low Neuroticism*],
+  table.header[][*High Neuroticism*][*Low Neuroticism*],
 
   [*High Agreeableness*],
   table.cell(stroke: orange + 2pt)[
@@ -800,9 +800,9 @@ calendar.
 >>>
 >>> #show table.cell.where(y: 0): strong
 #set table(stroke: (x, y) => (
-  left: if x == 0 or y > 0 { 1pt } else { 0pt },
+  left: if x == 0 or y > 0 { 1pt } else { 0pt },
   right: 1pt,
-  top: if y <= 1 { 1pt } else { 0pt },
+  top: if y <= 1 { 1pt } else { 0pt },
   bottom: 1pt,
 ))
 
@@ -1037,7 +1037,7 @@ on the right of the table.
     inset: (x: 0.6em,),
     stroke: (_, y) => (
       x: 1pt,
-      top: if y <= 1 { 1pt } else { 0pt },
+      top: if y <= 1 { 1pt } else { 0pt },
       bottom: 1pt,
     ),
     align: (left, right, right, right, right, left),
@@ -1090,7 +1090,7 @@ upright:
     inset: (x: 0.6em,),
     stroke: (_, y) => (
       x: 1pt,
-      top: if y <= 1 { 1pt } else { 0pt },
+      top: if y <= 1 { 1pt } else { 0pt },
       bottom: 1pt,
     ),
     align: (left, right, right, right, right, left),
@@ -1257,20 +1257,21 @@ style:
 #let moore = csv("moore.csv")
 
 #table(
-   columns: moore.first().len(),
-   ..moore.map(m => m.slice(2)).flatten(),
+   columns: 2,
+   ..moore.map(m => m.slice(2, 4)).flatten(),
 )
 ```
 
-This example renders the same as the previous one, but first uses the `map`
-function to change each row of the data. We pass a function to map that gets run
-on each row of the CSV and returns a new value to replace that row with. We use
-it to discard the first two columns with `slice`. Then, we spread the data into
-the `table` function. However, we need to pass a one-dimensional array and
-`moore`'s value is two-dimensional (that means that each of its row values
-contains an array with the cell data). That's why we call `flatten` which
-converts it to a one-dimensional array. We also extract the number of columns
-from the data itself.
+This example renders the same as the previous one, but we first load the CSV and
+then transform each row using `map`. The function we pass to `map` is applied to
+each row of the data and returns a new array that replaces the original row.
+Here, we use `{.slice(2, 4)}` to extract only the third and fourth column, since
+these are the ones we want to keep. Because `moore` is a two-dimensional array
+(each row is itself an array), the result of mapping is still a nested array.
+The `flatten` function converts this nested structure into a one-dimensional
+array, which is required when spreading the data into the `table` function.
+Finally, we explicitly specify `{columns: 2}` because we are keeping exactly two
+columns from each row.
 
 Now that we have nice code for our table, we should try to also make the table
 itself nice! The transistor counts go from millions in 1995 to trillions in 2021

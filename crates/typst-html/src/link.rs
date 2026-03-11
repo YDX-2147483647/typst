@@ -1,10 +1,11 @@
 use std::collections::VecDeque;
 
-use comemo::Track;
 use ecow::{EcoString, EcoVec, eco_format, eco_vec};
 use rustc_hash::{FxHashMap, FxHashSet};
 use typst_library::foundations::{Label, NativeElement};
-use typst_library::introspection::{Introspector, Location, Tag};
+use typst_library::introspection::{
+    DocumentPosition, InnerHtmlPosition, Introspector, Location, Tag,
+};
 use typst_library::layout::{Frame, FrameItem, Point};
 use typst_library::model::{Destination, LinkElem};
 use typst_utils::PicoStr;
@@ -45,7 +46,7 @@ pub fn identify_link_targets(
             .query(&LinkElem::ELEM.select())
             .iter()
             .map(|elem| elem.to_packed::<LinkElem>().unwrap())
-            .filter_map(|elem| match elem.dest.resolve(introspector.track()) {
+            .filter_map(|elem| match elem.dest.resolve_with_introspector(introspector) {
                 Ok(Destination::Location(loc)) => Some(loc),
                 _ => None,
             }),
@@ -84,7 +85,7 @@ fn traverse(
             // When visiting a start tag, we check whether the element needs an
             // ID and if so, add it to the queue, so that its first child node
             // receives an ID.
-            HtmlNode::Tag(Tag::Start(elem)) => {
+            HtmlNode::Tag(Tag::Start(elem, _)) => {
                 let loc = elem.location().unwrap();
                 if targets.contains(&loc) {
                     work.enqueue(loc, elem.label());
@@ -94,7 +95,7 @@ fn traverse(
             // When we reach an end tag, we check whether it closes an element
             // that is still in our queue. If so, that means the element
             // produced no nodes and we need to insert an empty span.
-            HtmlNode::Tag(Tag::End(loc, _)) => {
+            HtmlNode::Tag(Tag::End(loc, _, _)) => {
                 work.remove(*loc, |label| {
                     let mut element = HtmlElement::new(tag::span);
                     let id = identificator.assign(&mut element, label);
@@ -152,13 +153,16 @@ fn traverse_frame(
 ) {
     for (_, item) in frame.items() {
         match item {
-            FrameItem::Tag(Tag::Start(elem)) => {
+            FrameItem::Tag(Tag::Start(elem, _)) => {
                 let loc = elem.location().unwrap();
-                if targets.contains(&loc) {
-                    let pos = identificator.introspector.position(loc).point;
+                if targets.contains(&loc)
+                    && let DocumentPosition::Html(position) =
+                        identificator.introspector.position(loc)
+                    && let Some(InnerHtmlPosition::Frame(point)) = position.details()
+                {
                     let id = identificator.identify(elem.label());
                     work.ids.insert(loc, id.clone());
-                    link_points.push((pos, id));
+                    link_points.push((*point, id));
                 }
             }
             FrameItem::Group(group) => {

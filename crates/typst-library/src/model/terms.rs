@@ -1,7 +1,8 @@
-use crate::diag::bail;
+use crate::diag::{bail, warning};
 use crate::foundations::{
-    Array, Content, NativeElement, Packed, Smart, Styles, cast, elem, scope,
+    Array, Content, NativeElement, Packed, Reflect, Smart, Styles, cast, elem, scope,
 };
+use crate::introspection::{Locatable, Tagged};
 use crate::layout::{Em, HElem, Length};
 use crate::model::{ListItemLike, ListLike};
 
@@ -21,7 +22,7 @@ use crate::model::{ListItemLike, ListLike};
 /// # Syntax
 /// This function also has dedicated syntax: Starting a line with a slash,
 /// followed by a term, a colon and a description creates a term list item.
-#[elem(scope, title = "Term List")]
+#[elem(scope, title = "Term List", Locatable, Tagged)]
 pub struct TermsElem {
     /// Defines the default [spacing]($terms.spacing) of the term list. If it is
     /// `{false}`, the items are spaced apart with
@@ -97,6 +98,19 @@ pub struct TermsElem {
     /// ) [/ #product: Born in #year.]
     /// ```
     #[variadic]
+    #[parse(
+        for item in args.items.iter() {
+            if item.name.is_none() && Array::castable(&item.value.v) {
+                engine.sink.warn(warning!(
+                    item.value.span,
+                    "implicit conversion from array to `terms.item` is deprecated";
+                    hint: "use `terms.item(term, description)` instead";
+                    hint: "this conversion was never documented and is being phased out";
+                ));
+            }
+        }
+        args.all()?
+    )]
     pub children: Vec<Packed<TermItem>>,
 
     /// Whether we are currently within a term list.
@@ -112,7 +126,7 @@ impl TermsElem {
 }
 
 /// A term list item.
-#[elem(name = "item", title = "Term List Item")]
+#[elem(name = "item", title = "Term List Item", Tagged)]
 pub struct TermItem {
     /// The term described by the list item.
     #[required]

@@ -81,6 +81,7 @@ pub struct CategoryItem {
 
 /// Details about a function.
 #[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct FuncModel {
     pub path: Vec<EcoString>,
     pub name: EcoString,
@@ -91,10 +92,7 @@ pub struct FuncModel {
     pub contextual: bool,
     pub deprecation_message: Option<&'static str>,
     pub deprecation_until: Option<&'static str>,
-    pub details: Html,
-    /// This example is only for nested function models. Others can have
-    /// their example directly in their details.
-    pub example: Option<Html>,
+    pub details: Vec<DetailsBlock>,
     #[serde(rename = "self")]
     pub self_: bool,
     pub params: Vec<ParamModel>,
@@ -106,8 +104,7 @@ pub struct FuncModel {
 #[derive(Debug, Serialize)]
 pub struct ParamModel {
     pub name: &'static str,
-    pub details: Html,
-    pub example: Option<Html>,
+    pub details: Vec<DetailsBlock>,
     pub types: Vec<&'static str>,
     pub strings: Vec<StrParam>,
     pub default: Option<Html>,
@@ -116,6 +113,17 @@ pub struct ParamModel {
     pub required: bool,
     pub variadic: bool,
     pub settable: bool,
+}
+
+/// A block-level segment in a function's or parameters documentation.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+#[serde(tag = "kind", content = "content")]
+pub enum DetailsBlock {
+    /// A block of HTML.
+    Html(Html),
+    /// An example with an optional title.
+    Example { body: Html, title: Option<EcoString> },
 }
 
 /// A specific string that can be passed as an argument.
@@ -127,11 +135,13 @@ pub struct StrParam {
 
 /// Details about a group of functions.
 #[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct GroupModel {
     pub name: EcoString,
     pub title: EcoString,
     pub details: Html,
     pub functions: Vec<FuncModel>,
+    pub global_attributes: Vec<ParamModel>,
 }
 
 /// Details about a type.
@@ -160,7 +170,7 @@ pub struct SymbolsModel {
 #[serde(rename_all = "camelCase")]
 pub struct SymbolModel {
     pub name: EcoString,
-    pub codepoint: u32,
+    pub value: EcoString,
     pub accent: bool,
     pub alternates: Vec<EcoString>,
     pub markup_shorthand: Option<&'static str>,

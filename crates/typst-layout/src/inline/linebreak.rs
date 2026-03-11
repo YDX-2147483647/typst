@@ -11,8 +11,9 @@ use icu_segmenter::LineSegmenter;
 use typst_library::engine::Engine;
 use typst_library::layout::{Abs, Em};
 use typst_library::model::Linebreaks;
-use typst_library::text::{Lang, TextElem, is_default_ignorable};
+use typst_library::text::{Lang, TextElem};
 use typst_syntax::link_prefix;
+use typst_utils::Scalar;
 use unicode_segmentation::UnicodeSegmentation;
 
 use super::*;
@@ -57,6 +58,9 @@ static LINEBREAK_DATA: LazyLock<CodePointMapData<LineBreak>> = LazyLock::new(|| 
     icu_properties::maps::load_line_break(&blob().as_deserializing()).unwrap()
 });
 
+// Zero width space.
+const ZWS: char = '\u{200B}';
+
 /// A line break opportunity.
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
 pub enum Breakpoint {
@@ -71,18 +75,28 @@ pub enum Breakpoint {
 
 impl Breakpoint {
     /// Trim a line before this breakpoint.
-    pub fn trim(self, line: &str) -> &str {
-        // Trim default ignorables.
-        let line = line.trim_end_matches(is_default_ignorable);
-
+    pub fn trim(self, start: usize, line: &str) -> Trim {
         match self {
-            // Trim whitespace.
-            Self::Normal => line.trim_end_matches(char::is_whitespace),
+            // Trailing whitespace should be shaped, but the glyphs should have
+            // their advance width zeroed. This way, they are available for copy
+            // paste, but don't influence layout. The zero width space already
+            // has zero advance width, so would not need to be trimmed for that
+            // reason, but it can interfere with end-of-line adjustments in CJK
+            // layout, so it is included here. Unfortunately, there isn't
+            // currently a test for this.
+            Self::Normal => {
+                let trimmed =
+                    line.trim_end_matches(|c: char| c.is_whitespace() || c == ZWS);
+                Trim {
+                    layout: start + trimmed.len(),
+                    shaping: start + line.len(),
+                }
+            }
 
             // Trim linebreaks.
             Self::Mandatory => {
                 let lb = LINEBREAK_DATA.as_borrowed();
-                line.trim_end_matches(|c| {
+                let trimmed = line.trim_end_matches(|c| {
                     matches!(
                         lb.get(c),
                         LineBreak::MandatoryBreak
@@ -90,17 +104,38 @@ impl Breakpoint {
                             | LineBreak::LineFeed
                             | LineBreak::NextLine
                     )
-                })
+                });
+                Trim::uniform(start + trimmed.len())
             }
 
-            // Trim nothing further.
-            Self::Hyphen(..) => line,
+            // Trim nothing.
+            Self::Hyphen(..) => Trim::uniform(start + line.len()),
         }
     }
 
     /// Whether this is a hyphen breakpoint.
     pub fn is_hyphen(self) -> bool {
         matches!(self, Self::Hyphen(..))
+    }
+}
+
+/// How to trim the end of a line.
+///
+/// It's an invariant that `self.layout <= self.shaping`.
+pub struct Trim {
+    /// The text in the range `layout..shaping` should be shaped but should not
+    /// affect layout. This ensures that we trim spaces for layout purposes, but
+    /// still render zero-advance space glyphs for copy paste.
+    pub layout: usize,
+    /// The text should only be shaped up until the given text offset. Newlines
+    /// are already trimmed here.
+    pub shaping: usize,
+}
+
+impl Trim {
+    /// Create an instance with equal layout and shaping trim.
+    fn uniform(trim: usize) -> Self {
+        Self { layout: trim, shaping: trim }
     }
 }
 
@@ -597,7 +632,7 @@ fn raw_cost(
         // If the line shall be justified or needs shrinking, it has normal
         // badness with cost 100|ratio|^3. We limit the ratio to 10 as to not
         // get to close to our maximum cost.
-        100.0 * ratio.abs().powi(3)
+        100.0 * Scalar::new(ratio.abs()).powi(3).get()
     } else {
         // If the line shouldn't be justified and doesn't need shrink, we don't
         // pay any cost.
@@ -634,7 +669,7 @@ fn raw_cost(
     //
     // We add one to minimize the number of lines when everything else is more
     // or less equal.
-    (1.0 + badness + penalty).powi(2)
+    Scalar::new(1.0 + badness + penalty).powi(2).get()
 }
 
 /// Calls `f` for all possible points in the text where lines can broken.

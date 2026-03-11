@@ -1,13 +1,21 @@
 // Test citations and bibliographies.
 
---- bibliography-basic ---
-#set page(width: 200pt)
+--- bibliography-basic paged html pdftags pdfstandard(ua-1) ---
+#show: it => context { set page(width: 200pt) if target() == "paged"; it }
 
 = Details
 See also @arrgh #cite(<distress>, supplement: [p.~22]), @arrgh[p.~4], and @distress[p.~5].
 #bibliography("/assets/bib/works.bib")
 
---- bibliography-before-content ---
+--- bibliography-no-title paged html ---
+@distress
+#bibliography("/assets/bib/works.bib", title: none)
+
+--- bibliography-custom-title paged html ---
+@distress
+#bibliography("/assets/bib/works.bib", title: [My References])
+
+--- bibliography-before-content paged ---
 // Test unconventional order.
 #set page(width: 200pt)
 #bibliography(
@@ -22,8 +30,9 @@ the net-work is a creature of its own.
 This is close to piratery! @arrgh
 And quark! @quark
 
---- bibliography-multiple-files ---
-#set page(width: 200pt)
+--- bibliography-multiple-files paged html ---
+#show: it => context { set page(width: 200pt) if target() == "paged"; it }
+
 #set heading(numbering: "1.")
 #show bibliography: set heading(numbering: "1.")
 
@@ -31,11 +40,28 @@ And quark! @quark
 Now we have multiple bibliographies containing @glacier-melt @keshav2007read
 #bibliography(("/assets/bib/works.bib", "/assets/bib/works_too.bib"))
 
---- bibliography-duplicate-key ---
+--- bibliography-source-path paged empty ---
+#show heading: none
+#bibliography(path("/assets/bib/works_too.bib"))
+
+--- bibliography-source-types paged empty ---
+#let src = ```yaml
+hi:
+  type: Book
+```
+
+#show heading: none
+#bibliography((
+  "/assets/bib/works.bib",
+  path("/assets/bib/works_too.bib"),
+  bytes(src.text)
+))
+
+--- bibliography-duplicate-key eval ---
 // Error: 15-65 duplicate bibliography keys: netwok, issue201, arrgh, quark, distress, glacier-melt, tolkien54, DBLP:books/lib/Knuth86a, sharing, restful, mcintosh_anxiety, psychology25
 #bibliography(("/assets/bib/works.bib", "/assets/bib/works.bib"))
 
---- bibliography-ordering ---
+--- bibliography-ordering paged ---
 #set page(width: 300pt)
 
 @mcintosh_anxiety
@@ -43,17 +69,17 @@ Now we have multiple bibliographies containing @glacier-melt @keshav2007read
 
 #bibliography("/assets/bib/works.bib")
 
---- bibliography-full ---
+--- bibliography-full paged ---
 #set page(paper: "a6", height: auto)
 #bibliography("/assets/bib/works_too.bib", full: true)
 
---- bibliography-math ---
+--- bibliography-math paged ---
 #set page(width: 200pt)
 
 @Zee04
 #bibliography("/assets/bib/works_too.bib", style: "mla")
 
---- bibliography-grid-par ---
+--- bibliography-grid-par paged ---
 // Ensure that a grid-based bibliography does not produce paragraphs.
 #show par: highlight
 
@@ -62,7 +88,7 @@ Now we have multiple bibliographies containing @glacier-melt @keshav2007read
 
 #bibliography("/assets/bib/works_too.bib")
 
---- bibliography-indent-par ---
+--- bibliography-indent-par paged ---
 // Ensure that an indent-based bibliography does not produce paragraphs.
 #show par: highlight
 
@@ -71,11 +97,11 @@ Now we have multiple bibliographies containing @glacier-melt @keshav2007read
 
 #bibliography("/assets/bib/works_too.bib", style: "mla")
 
---- bibliography-style-not-suitable ---
+--- bibliography-style-not-suitable paged ---
 // Error: 2-62 CSL style "Alphanumeric" is not suitable for bibliographies
 #bibliography("/assets/bib/works.bib", style: "alphanumeric")
 
---- bibliography-empty-key ---
+--- bibliography-empty-key eval ---
 #let src = ```yaml
 "":
   type: Book
@@ -83,7 +109,7 @@ Now we have multiple bibliographies containing @glacier-melt @keshav2007read
 // Error: 15-30 bibliography contains entry with empty key
 #bibliography(bytes(src.text))
 
---- issue-4618-bibliography-set-heading-level ---
+--- issue-4618-bibliography-set-heading-level paged ---
 // Test that the bibliography block's heading is set to 2 by the show rule,
 // and therefore should be rendered like a level-2 heading. Notably, this
 // bibliography heading should not be underlined.
@@ -95,3 +121,62 @@ Now we have multiple bibliographies containing @glacier-melt @keshav2007read
 @Zee04
 
 #bibliography("/assets/bib/works_too.bib")
+
+--- bibliography-chicago-fullnotes-warning paged empty ---
+// Test warning for deprecated alias.
+// Warning: 47-66 style "chicago-fullnotes" has been deprecated in favor of "chicago-notes"
+#bibliography("/assets/bib/works.bib", style: "chicago-fullnotes", title: none)
+
+--- bibliography-modern-humanities-research-association-warning paged empty ---
+// Test warning for deprecated alias.
+// Warning: 47-87 style "modern-humanities-research-association" has been deprecated in favor of "modern-humanities-research-association-notes"
+#bibliography("/assets/bib/works.bib", style: "modern-humanities-research-association", title: none)
+
+--- bibliography-csl-display paged html ---
+// Test a combination of CSL `display` attributes. Most of the display
+// attributes are barely used by any styles, so we have a custom style here.
+
+#let style = ```csl
+  <?xml version="1.0" encoding="utf-8"?>
+  <style xmlns="http://purl.org/net/xbiblio/csl" class="in-text" version="1.0">
+    <info>
+      <title>Test</title>
+      <id>test</id>
+    </info>
+    <citation collapse="citation-number">
+      <layout>
+        <text variable="citation-number"/>
+      </layout>
+    </citation>
+    <bibliography>
+      <layout>
+        <text variable="title" font-style="italic" />
+        <text variable="citation-number" display="left-margin" prefix="|" suffix="|" />
+        <group display="indent">
+          <text term="by" suffix=" " />
+          <!-- This left-margin attribute is ignored because it is in a container. -->
+          <names variable="author" display="left-margin" />
+        </group>
+        <group display="block" prefix="(" suffix=")">
+          <text term="edition" suffix=" " text-case="capitalize-first" />
+          <date variable="issued"><date-part name="year"/></date>
+        </group>
+      </layout>
+    </bibliography>
+  </style>
+```
+
+#let bib = ```bib
+  @article{entry1,
+    title={Title 1},
+    author={Author 1},
+    year={2021},
+  }
+```
+
+#bibliography(
+  bytes(bib.text),
+  style: bytes(style.text),
+  title: none,
+  full: true,
+)

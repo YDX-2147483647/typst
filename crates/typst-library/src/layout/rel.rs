@@ -59,8 +59,8 @@ use crate::layout::{Abs, Em, Length, Ratio};
 /// [floats]($float).
 ///
 /// A relative length has the following fields:
-/// - `length`: Its length component.
-/// - `ratio`: Its ratio component.
+/// - `length`: Its [length] component.
+/// - `ratio`: Its [ratio] component.
 ///
 /// ```example
 /// #(100% - 50pt).length \
@@ -87,7 +87,7 @@ impl<T: Numeric> Rel<T> {
     }
 
     /// Create a new relative from its parts.
-    pub fn new(rel: Ratio, abs: T) -> Self {
+    pub const fn new(rel: Ratio, abs: T) -> Self {
         Self { rel, abs }
     }
 

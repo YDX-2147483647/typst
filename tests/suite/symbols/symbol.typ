@@ -1,6 +1,6 @@
 // Test symbols.
 
---- symbol ---
+--- symbol paged ---
 #emoji.face
 #emoji.woman.old
 #emoji.turtle
@@ -13,13 +13,17 @@
 
 #sym.arrow.r;this and this#sym.arrow.l;
 
---- symbol-constructor ---
+--- symbol-constructor paged ---
 #let envelope = symbol(
   "🖂",
   ("stamped", "🖃"),
   ("stamped.pen", "🖆"),
   ("lightning", "🖄"),
   ("fly", "🖅"),
+)
+#let one = symbol(
+  "1",
+  ("emoji", "1️")
 )
 
 #envelope
@@ -28,53 +32,55 @@
 #envelope.stamped.pen
 #envelope.lightning
 #envelope.fly
+#one
+#one.emoji
 
---- symbol-constructor-empty ---
+--- symbol-constructor-empty eval ---
 // Error: 2-10 expected at least one variant
 #symbol()
 
---- symbol-constructor-invalid-modifier ---
+--- symbol-constructor-invalid-modifier eval ---
 // Error: 2:3-2:24 invalid symbol modifier: " id!"
 #symbol(
   ("invalid. id!", "x")
 )
 
---- symbol-constructor-duplicate-modifier ---
+--- symbol-constructor-duplicate-modifier eval ---
 // Error: 2:3-2:31 duplicate modifier within variant: "duplicate"
 // Hint: 2:3-2:31 modifiers are not ordered, so each one may appear only once
 #symbol(
   ("duplicate.duplicate", "x"),
 )
 
---- symbol-constructor-duplicate-default-variant ---
+--- symbol-constructor-duplicate-default-variant eval ---
 // Error: 3:3-3:6 duplicate default variant
 #symbol(
   "x",
   "y",
 )
 
---- symbol-constructor-duplicate-empty-variant ---
+--- symbol-constructor-duplicate-empty-variant eval ---
 // Error: 3:3-3:12 duplicate default variant
 #symbol(
   ("", "x"),
   ("", "y"),
 )
 
---- symbol-constructor-default-and-empty-variants ---
+--- symbol-constructor-default-and-empty-variants eval ---
 // Error: 3:3-3:12 duplicate default variant
 #symbol(
   "x",
   ("", "y"),
 )
 
---- symbol-constructor-duplicate-variant ---
+--- symbol-constructor-duplicate-variant eval ---
 // Error: 3:3-3:29 duplicate variant: "duplicate.variant"
 #symbol(
   ("duplicate.variant", "x"),
   ("duplicate.variant", "y"),
 )
 
---- symbol-constructor-duplicate-variant-different-order ---
+--- symbol-constructor-duplicate-variant-different-order eval ---
 // Error: 3:3-3:29 duplicate variant: "variant.duplicate"
 // Hint: 3:3-3:29 variants with the same modifiers are identical, regardless of their order
 #symbol(
@@ -82,11 +88,31 @@
   ("variant.duplicate", "y"),
 )
 
---- symbol-unknown-modifier ---
+--- symbol-constructor-empty-variant-value eval ---
+// Error: 2:3-2:5 invalid variant value: ""
+// Hint: 2:3-2:5 variant value must be exactly one grapheme cluster
+// Error: 3:3-3:16 invalid variant value: ""
+// Hint: 3:3-3:16 variant value must be exactly one grapheme cluster
+#symbol(
+  "",
+  ("empty", "")
+)
+
+--- symbol-constructor-multi-cluster-variant-value eval ---
+// Error: 2:3-2:7 invalid variant value: "aa"
+// Hint: 2:3-2:7 variant value must be exactly one grapheme cluster
+// Error: 3:3-3:14 invalid variant value: "bb"
+// Hint: 3:3-3:14 variant value must be exactly one grapheme cluster
+#symbol(
+  "aa",
+  ("b", "bb")
+)
+
+--- symbol-unknown-modifier eval ---
 // Error: 13-20 unknown symbol modifier
 #emoji.face.garbage
 
---- symbol-repr ---
+--- symbol-repr eval ---
 #test(
   repr(sym.amp),
   `symbol("&", ("inv", "⅋"))`.text,
@@ -150,10 +176,26 @@
   `symbol("🖅")`.text,
 )
 
---- symbol-sect-deprecated ---
+--- symbol-sect-deprecated paged ---
 // Warning: 5-9 `sect` is deprecated, use `inter` instead
 $ A sect B = A inter B $
 
---- issue-5930-symbol-label ---
+--- symbol-modifier-deprecated paged ---
+// Warning: 7-12 `ast.small` is deprecated (CJK compatibility character), use ﹡ or `\u{fe61}` instead
+$ ast.small $
+
+// Warning: 14-20 `bracket.double` is deprecated, use `bracket.stroked` instead
+#sym.bracket.double.r
+
+--- issue-5930-symbol-label paged ---
 #emoji.face<lab>
 #context test(query(<lab>).first().text, "😀")
+
+--- presentation-selectors paged ---
+// Currently, presentation selectors do not cause font fallback when the main
+// font supports at least one presentation, instead causing a fallback of the
+// presentation form. This should probably be solved at some point, making the
+// emojis below render with an emoji form.
+// See: https://github.com/typst/typst/pull/6875.
+#sym.copyright #emoji.copyright \
+#sym.suit.heart #emoji.suit.heart

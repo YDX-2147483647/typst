@@ -7,7 +7,9 @@ use ttf_parser::{PlatformId, Tag, name_id};
 use unicode_segmentation::UnicodeSegmentation;
 
 use super::exceptions::find_exception;
-use crate::text::{Font, FontStretch, FontStyle, FontVariant, FontWeight};
+use crate::text::{
+    Font, FontStretch, FontStyle, FontVariant, FontWeight, is_default_ignorable,
+};
 
 /// Metadata about a collection of fonts.
 #[derive(Debug, Default, Clone, Hash)]
@@ -56,17 +58,16 @@ impl FontBook {
         self.families.contains_key(family)
     }
 
-    /// An ordered iterator over all font families this book knows and details
-    /// about the fonts that are part of them.
+    /// An ordered iterator over all font families this book knows and the
+    /// font indices that belong to them.
     pub fn families(
         &self,
-    ) -> impl Iterator<Item = (&str, impl Iterator<Item = &FontInfo>)> + '_ {
+    ) -> impl Iterator<Item = (&str, impl Iterator<Item = usize>)> + '_ {
         // Since the keys are lowercased, we instead use the family field of the
         // first face's info.
         self.families.values().map(|ids| {
             let family = self.infos[ids[0]].family.as_str();
-            let infos = ids.iter().map(|&id| &self.infos[id]);
-            (family, infos)
+            (family, ids.iter().copied())
         })
     }
 
@@ -99,8 +100,12 @@ impl FontBook {
         variant: FontVariant,
         text: &str,
     ) -> Option<usize> {
-        // Find the fonts that contain the text's first non-space char ...
-        let c = text.chars().find(|c| !c.is_whitespace())?;
+        // Find the fonts that contain the text's first non-space and
+        // non-ignorable char ...
+        let c = text
+            .chars()
+            .find(|&c| !c.is_whitespace() && !is_default_ignorable(c))?;
+
         let ids = self
             .infos
             .iter()
@@ -186,7 +191,7 @@ pub struct FontInfo {
 
 bitflags::bitflags! {
     /// Bitflags describing characteristics of a font.
-    #[derive(Copy, Clone, Eq, PartialEq, Hash, Debug)]
+    #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
     #[derive(Serialize, Deserialize)]
     #[serde(transparent)]
     pub struct FontFlags: u32 {
@@ -242,7 +247,14 @@ impl FontInfo {
 
                 // Some fonts miss the relevant bits for italic or oblique, so
                 // we also try to infer that from the full name.
-                let italic = ttf.is_italic() || full.contains("italic");
+                //
+                // We do not use `ttf.is_italic()` because that also checks the
+                // italic angle which leads to false positives for some oblique
+                // fonts.
+                //
+                // See <https://github.com/typst/typst/issues/7479>.
+                let italic =
+                    ttf.style() == ttf_parser::Style::Italic || full.contains("italic");
                 let oblique = ttf.is_oblique()
                     || full.contains("oblique")
                     || full.contains("slanted");

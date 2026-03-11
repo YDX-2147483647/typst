@@ -9,10 +9,11 @@ use typst_library::layout::Size;
 use typst_library::text::{Font, Glyph, TextItem};
 use typst_library::visualize::FillRule;
 use typst_syntax::Span;
+use typst_utils::defer;
 
 use crate::convert::{FrameContext, GlobalContext};
-use crate::paint;
 use crate::util::{AbsExt, TransformExt, display_font};
+use crate::{paint, tags};
 
 #[typst_macros::time(name = "handle text")]
 pub(crate) fn handle_text(
@@ -21,7 +22,8 @@ pub(crate) fn handle_text(
     surface: &mut Surface,
     gc: &mut GlobalContext,
 ) -> SourceResult<()> {
-    *gc.languages.entry(t.lang).or_insert(0) += t.glyphs.len();
+    let mut handle = tags::text(gc, fc, surface, t);
+    let surface = handle.surface();
 
     let font = convert_font(gc, t.font.clone())?;
     let fill = paint::convert_fill(
@@ -46,6 +48,7 @@ pub(crate) fn handle_text(
     let glyphs: &[PdfGlyph] = TransparentWrapper::wrap_slice(t.glyphs.as_slice());
 
     surface.push_transform(&fc.state().transform().to_krilla());
+    let mut surface = defer(surface, |s| s.pop());
     surface.set_fill(Some(fill));
     surface.set_stroke(stroke);
     surface.draw_glyphs(
@@ -56,8 +59,6 @@ pub(crate) fn handle_text(
         size.to_f32(),
         false,
     );
-
-    surface.pop();
 
     Ok(())
 }
@@ -84,15 +85,18 @@ fn build_font(typst_font: Font) -> SourceResult<krilla::text::Font> {
         Arc::new(typst_font.data().clone());
 
     match krilla::text::Font::new(font_data.into(), typst_font.index()) {
-        None => {
-            let font_str = display_font(&typst_font);
-            bail!(Span::detached(), "failed to process font {font_str}");
-        }
         Some(f) => Ok(f),
+        None => {
+            bail!(
+                Span::detached(),
+                "failed to process {}",
+                display_font(Some(&typst_font)),
+            )
+        }
     }
 }
 
-#[derive(TransparentWrapper, Debug)]
+#[derive(Debug, TransparentWrapper)]
 #[repr(transparent)]
 struct PdfGlyph(Glyph);
 

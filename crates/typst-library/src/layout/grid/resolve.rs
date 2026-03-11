@@ -9,7 +9,6 @@ use typst_library::diag::{
 };
 use typst_library::engine::Engine;
 use typst_library::foundations::{Content, Fold, Packed, Smart, StyleChain};
-use typst_library::introspection::Locator;
 use typst_library::layout::{
     Abs, Alignment, Axes, Celled, GridCell, GridChild, GridElem, GridItem, Length,
     OuterHAlignment, OuterVAlignment, Rel, ResolvedCelled, Sides, Sizing,
@@ -21,16 +20,15 @@ use typst_library::visualize::{Paint, Stroke};
 use typst_syntax::Span;
 use typst_utils::{NonZeroExt, SmallBitSet};
 
-use crate::introspection::SplitLocator;
+use crate::pdf::{TableCellKind, TableHeaderScope};
 
 /// Convert a grid to a cell grid.
 #[typst_macros::time(span = elem.span())]
-pub fn grid_to_cellgrid<'a>(
+pub fn grid_to_cellgrid(
     elem: &Packed<GridElem>,
     engine: &mut Engine,
-    locator: Locator<'a>,
     styles: StyleChain,
-) -> SourceResult<CellGrid<'a>> {
+) -> SourceResult<CellGrid> {
     let inset = elem.inset.get_cloned(styles);
     let align = elem.align.get_ref(styles);
     let columns = elem.columns.get_ref(styles);
@@ -64,7 +62,6 @@ pub fn grid_to_cellgrid<'a>(
     resolve_cellgrid(
         tracks,
         gutter,
-        locator,
         children,
         fill,
         align,
@@ -79,12 +76,11 @@ pub fn grid_to_cellgrid<'a>(
 
 /// Convert a table to a cell grid.
 #[typst_macros::time(span = elem.span())]
-pub fn table_to_cellgrid<'a>(
+pub fn table_to_cellgrid(
     elem: &Packed<TableElem>,
     engine: &mut Engine,
-    locator: Locator<'a>,
     styles: StyleChain,
-) -> SourceResult<CellGrid<'a>> {
+) -> SourceResult<CellGrid> {
     let inset = elem.inset.get_cloned(styles);
     let align = elem.align.get_ref(styles);
     let columns = elem.columns.get_ref(styles);
@@ -118,7 +114,6 @@ pub fn table_to_cellgrid<'a>(
     resolve_cellgrid(
         tracks,
         gutter,
-        locator,
         children,
         fill,
         align,
@@ -206,7 +201,7 @@ fn table_item_to_resolvable(
 }
 
 impl ResolvableCell for Packed<TableCell> {
-    fn resolve_cell<'a>(
+    fn resolve_cell(
         mut self,
         x: usize,
         y: usize,
@@ -215,14 +210,16 @@ impl ResolvableCell for Packed<TableCell> {
         inset: Sides<Option<Rel<Length>>>,
         stroke: Sides<Option<Option<Arc<Stroke<Abs>>>>>,
         breakable: bool,
-        locator: Locator<'a>,
         styles: StyleChain,
-    ) -> Cell<'a> {
+        kind: Smart<TableCellKind>,
+    ) -> Cell {
         let cell = &mut *self;
         let colspan = cell.colspan.get(styles);
         let rowspan = cell.rowspan.get(styles);
         let breakable = cell.breakable.get(styles).unwrap_or(breakable);
         let fill = cell.fill.get_cloned(styles).unwrap_or_else(|| fill.clone());
+
+        let kind = cell.kind.get(styles).or(kind);
 
         let cell_stroke = cell.stroke.resolve(styles);
         let stroke_overridden =
@@ -267,9 +264,9 @@ impl ResolvableCell for Packed<TableCell> {
             }),
         );
         cell.breakable.set(Smart::Custom(breakable));
+        cell.kind.set(kind);
         Cell {
             body: self.pack(),
-            locator,
             fill,
             colspan,
             rowspan,
@@ -301,7 +298,7 @@ impl ResolvableCell for Packed<TableCell> {
 }
 
 impl ResolvableCell for Packed<GridCell> {
-    fn resolve_cell<'a>(
+    fn resolve_cell(
         mut self,
         x: usize,
         y: usize,
@@ -310,9 +307,9 @@ impl ResolvableCell for Packed<GridCell> {
         inset: Sides<Option<Rel<Length>>>,
         stroke: Sides<Option<Option<Arc<Stroke<Abs>>>>>,
         breakable: bool,
-        locator: Locator<'a>,
         styles: StyleChain,
-    ) -> Cell<'a> {
+        _: Smart<TableCellKind>,
+    ) -> Cell {
         let cell = &mut *self;
         let colspan = cell.colspan.get(styles);
         let rowspan = cell.rowspan.get(styles);
@@ -364,7 +361,6 @@ impl ResolvableCell for Packed<GridCell> {
         cell.breakable.set(Smart::Custom(breakable));
         Cell {
             body: self.pack(),
-            locator,
             fill,
             colspan,
             rowspan,
@@ -397,6 +393,7 @@ impl ResolvableCell for Packed<GridCell> {
 
 /// Represents an explicit grid line (horizontal or vertical) specified by the
 /// user.
+#[derive(Debug, Eq, PartialEq, Hash)]
 pub struct Line {
     /// The index of the track after this line. This will be the index of the
     /// row a horizontal line is above of, or of the column right after a
@@ -426,7 +423,7 @@ pub struct Line {
 }
 
 /// A repeatable grid header. Starts at the first row.
-#[derive(Debug)]
+#[derive(Debug, Eq, PartialEq, Hash)]
 pub struct Header {
     /// The range of rows included in this header.
     pub range: Range<usize>,
@@ -435,7 +432,7 @@ pub struct Header {
     /// Higher level headers repeat together with lower level headers. If a
     /// lower level header stops repeating, all higher level headers do as
     /// well.
-    pub level: u32,
+    pub level: NonZeroU32,
     /// Whether this header cannot be repeated nor should have orphan
     /// prevention because it would be about to cease repetition, either
     /// because it is followed by headers of conflicting levels, or because
@@ -445,7 +442,7 @@ pub struct Header {
 }
 
 /// A repeatable grid footer. Stops at the last row.
-#[derive(Debug)]
+#[derive(Debug, Eq, PartialEq, Hash)]
 pub struct Footer {
     /// The first row included in this footer.
     pub start: usize,
@@ -470,6 +467,7 @@ impl Footer {
 /// It still exists even when not repeatable, but must not have additional
 /// considerations by grid layout, other than for consistency (such as making
 /// a certain group of rows unbreakable).
+#[derive(Debug, Eq, PartialEq, Hash)]
 pub struct Repeatable<T> {
     inner: T,
 
@@ -507,7 +505,7 @@ pub trait ResolvableCell {
     /// the `breakable` field.
     /// Returns a final Cell.
     #[allow(clippy::too_many_arguments)]
-    fn resolve_cell<'a>(
+    fn resolve_cell(
         self,
         x: usize,
         y: usize,
@@ -516,9 +514,9 @@ pub trait ResolvableCell {
         inset: Sides<Option<Rel<Length>>>,
         stroke: Sides<Option<Option<Arc<Stroke<Abs>>>>>,
         breakable: bool,
-        locator: Locator<'a>,
         styles: StyleChain,
-    ) -> Cell<'a>;
+        kind: Smart<TableCellKind>,
+    ) -> Cell;
 
     /// Returns this cell's column override.
     fn x(&self, styles: StyleChain) -> Smart<usize>;
@@ -570,11 +568,10 @@ pub enum ResolvableGridItem<T: ResolvableCell> {
 }
 
 /// Represents a cell in CellGrid, to be laid out by GridLayouter.
-pub struct Cell<'a> {
+#[derive(Debug, PartialEq, Hash)]
+pub struct Cell {
     /// The cell's body.
     pub body: Content,
-    /// The cell's locator.
-    pub locator: Locator<'a>,
     /// The cell's fill.
     pub fill: Option<Paint>,
     /// The amount of columns spanned by the cell.
@@ -600,12 +597,11 @@ pub struct Cell<'a> {
     pub breakable: bool,
 }
 
-impl<'a> Cell<'a> {
-    /// Create a simple cell given its body and its locator.
-    pub fn new(body: Content, locator: Locator<'a>) -> Self {
+impl Cell {
+    /// Create a simple cell given its body.
+    pub fn new(body: Content) -> Self {
         Self {
             body,
-            locator,
             fill: None,
             colspan: NonZeroUsize::ONE,
             rowspan: NonZeroUsize::ONE,
@@ -620,7 +616,7 @@ impl<'a> Cell<'a> {
 /// its index. This is mostly only relevant when gutter is used, since, then,
 /// the position after a track is not the same as before the next
 /// non-gutter track.
-#[derive(Copy, Clone, PartialEq, Eq)]
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
 pub enum LinePosition {
     /// The line should be drawn before its track (e.g. hline on top of a row).
     Before,
@@ -629,9 +625,10 @@ pub enum LinePosition {
 }
 
 /// A grid entry.
-pub enum Entry<'a> {
+#[derive(Debug, PartialEq, Hash)]
+pub enum Entry {
     /// An entry which holds a cell.
-    Cell(Cell<'a>),
+    Cell(Cell),
     /// An entry which is merged with another cell.
     Merged {
         /// The index of the cell this entry is merged with.
@@ -639,9 +636,9 @@ pub enum Entry<'a> {
     },
 }
 
-impl<'a> Entry<'a> {
+impl Entry {
     /// Obtains the cell inside this entry, if this is not a merged cell.
-    pub fn as_cell(&self) -> Option<&Cell<'a>> {
+    pub fn as_cell(&self) -> Option<&Cell> {
         match self {
             Self::Cell(cell) => Some(cell),
             Self::Merged { .. } => None,
@@ -657,9 +654,10 @@ pub enum ResolvableGridChild<T: ResolvableCell, I> {
 }
 
 /// A grid of cells, including the columns, rows, and cell data.
-pub struct CellGrid<'a> {
+#[derive(Debug, PartialEq, Hash)]
+pub struct CellGrid {
     /// The grid cells.
-    pub entries: Vec<Entry<'a>>,
+    pub entries: Vec<Entry>,
     /// The column tracks including gutter tracks.
     pub cols: Vec<Sizing>,
     /// The row tracks including gutter tracks.
@@ -680,12 +678,12 @@ pub struct CellGrid<'a> {
     pub has_gutter: bool,
 }
 
-impl<'a> CellGrid<'a> {
+impl CellGrid {
     /// Generates the cell grid, given the tracks and cells.
     pub fn new(
         tracks: Axes<&[Sizing]>,
         gutter: Axes<&[Sizing]>,
-        cells: impl IntoIterator<Item = Cell<'a>>,
+        cells: impl IntoIterator<Item = Cell>,
     ) -> Self {
         let entries = cells.into_iter().map(Entry::Cell).collect();
         Self::new_internal(tracks, gutter, vec![], vec![], vec![], None, entries)
@@ -699,7 +697,7 @@ impl<'a> CellGrid<'a> {
         hlines: Vec<Vec<Line>>,
         headers: Vec<Repeatable<Header>>,
         footer: Option<Repeatable<Footer>>,
-        entries: Vec<Entry<'a>>,
+        entries: Vec<Entry>,
     ) -> Self {
         let mut cols = vec![];
         let mut rows = vec![];
@@ -761,7 +759,7 @@ impl<'a> CellGrid<'a> {
     ///
     /// Returns `None` if it's a gutter cell.
     #[track_caller]
-    pub fn entry(&self, x: usize, y: usize) -> Option<&Entry<'a>> {
+    pub fn entry(&self, x: usize, y: usize) -> Option<&Entry> {
         assert!(x < self.cols.len());
         assert!(y < self.rows.len());
 
@@ -783,7 +781,7 @@ impl<'a> CellGrid<'a> {
     ///
     /// Returns `None` if it's a gutter cell or merged position.
     #[track_caller]
-    pub fn cell(&self, x: usize, y: usize) -> Option<&Cell<'a>> {
+    pub fn cell(&self, x: usize, y: usize) -> Option<&Cell> {
         self.entry(x, y).and_then(Entry::as_cell)
     }
 
@@ -880,6 +878,21 @@ impl<'a> CellGrid<'a> {
     }
 
     #[inline]
+    pub fn non_gutter_row_count(&self) -> usize {
+        if self.has_gutter {
+            // Calculation: With gutters, we have
+            // 'rows = 2 * (non-gutter rows) - 1', since there is a gutter
+            // row between each regular row. Therefore,
+            // 'floor(rows / 2)' will be equal to
+            // 'floor(non-gutter rows - 1/2) = non-gutter-rows - 1',
+            // so 'non-gutter rows = 1 + floor(rows / 2)'.
+            1 + self.rows.len() / 2
+        } else {
+            self.rows.len()
+        }
+    }
+
+    #[inline]
     pub fn has_repeated_headers(&self) -> bool {
         self.headers.iter().any(|h| h.repeated)
     }
@@ -892,10 +905,9 @@ impl<'a> CellGrid<'a> {
 /// must implement Default in order to fill positions in the grid which
 /// weren't explicitly specified by the user with empty cells.
 #[allow(clippy::too_many_arguments)]
-pub fn resolve_cellgrid<'a, 'x, T, C, I>(
+pub fn resolve_cellgrid<'a, T, C, I>(
     tracks: Axes<&'a [Sizing]>,
     gutter: Axes<&'a [Sizing]>,
-    locator: Locator<'x>,
     children: C,
     fill: &'a Celled<Option<Paint>>,
     align: &'a Celled<Smart<Alignment>>,
@@ -904,7 +916,7 @@ pub fn resolve_cellgrid<'a, 'x, T, C, I>(
     engine: &'a mut Engine,
     styles: StyleChain<'a>,
     span: Span,
-) -> SourceResult<CellGrid<'x>>
+) -> SourceResult<CellGrid>
 where
     T: ResolvableCell + Default,
     I: Iterator<Item = ResolvableGridItem<T>>,
@@ -914,7 +926,6 @@ where
     CellGridResolver {
         tracks,
         gutter,
-        locator: locator.split(),
         fill,
         align,
         inset,
@@ -926,10 +937,9 @@ where
     .resolve(children)
 }
 
-struct CellGridResolver<'a, 'b, 'x> {
+struct CellGridResolver<'a, 'b> {
     tracks: Axes<&'a [Sizing]>,
     gutter: Axes<&'a [Sizing]>,
-    locator: SplitLocator<'x>,
     fill: &'a Celled<Option<Paint>>,
     align: &'a Celled<Smart<Alignment>>,
     inset: &'a Celled<Sides<Option<Rel<Length>>>>,
@@ -939,7 +949,7 @@ struct CellGridResolver<'a, 'b, 'x> {
     span: Span,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Copy, Clone)]
 enum RowGroupKind {
     Header,
     Footer,
@@ -996,8 +1006,8 @@ struct RowGroupData {
     top_hlines_end: Option<usize>,
 }
 
-impl<'x> CellGridResolver<'_, '_, 'x> {
-    fn resolve<T, C, I>(mut self, children: C) -> SourceResult<CellGrid<'x>>
+impl CellGridResolver<'_, '_> {
+    fn resolve<T, C, I>(mut self, children: C) -> SourceResult<CellGrid>
     where
         T: ResolvableCell + Default,
         I: Iterator<Item = ResolvableGridItem<T>>,
@@ -1138,7 +1148,7 @@ impl<'x> CellGridResolver<'_, '_, 'x> {
         footer: &mut Option<(usize, Span, Footer)>,
         repeat_footer: &mut bool,
         auto_index: &mut usize,
-        resolved_cells: &mut Vec<Option<Entry<'x>>>,
+        resolved_cells: &mut Vec<Option<Entry>>,
         at_least_one_cell: &mut bool,
         child: ResolvableGridChild<T, I>,
     ) -> SourceResult<()>
@@ -1197,8 +1207,14 @@ impl<'x> CellGridResolver<'_, '_, 'x> {
         // a non-empty row.
         let mut first_available_row = 0;
 
+        // The cell kind is currently only used for tagged PDF.
+        let cell_kind;
+
         let (header_footer_items, simple_item) = match child {
-            ResolvableGridChild::Header { repeat, level, span, items, .. } => {
+            ResolvableGridChild::Header { repeat, level, span, items } => {
+                cell_kind =
+                    Smart::Custom(TableCellKind::Header(level, TableHeaderScope::Column));
+
                 row_group_data = Some(RowGroupData {
                     range: None,
                     span,
@@ -1225,10 +1241,12 @@ impl<'x> CellGridResolver<'_, '_, 'x> {
 
                 (Some(items), None)
             }
-            ResolvableGridChild::Footer { repeat, span, items, .. } => {
+            ResolvableGridChild::Footer { repeat, span, items } => {
                 if footer.is_some() {
                     bail!(span, "cannot have more than one footer");
                 }
+
+                cell_kind = Smart::Custom(TableCellKind::Footer);
 
                 row_group_data = Some(RowGroupData {
                     range: None,
@@ -1248,6 +1266,8 @@ impl<'x> CellGridResolver<'_, '_, 'x> {
                 (Some(items), None)
             }
             ResolvableGridChild::Item(item) => {
+                cell_kind = Smart::Custom(TableCellKind::Data);
+
                 if matches!(item, ResolvableGridItem::Cell(_)) {
                     *at_least_one_cell = true;
                 }
@@ -1393,7 +1413,8 @@ impl<'x> CellGridResolver<'_, '_, 'x> {
                 bail!(
                     cell_span,
                     "cell's colspan would cause it to exceed the available column(s)";
-                    hint: "try placing the cell in another position or reducing its colspan"
+                    hint: "try placing the cell in another position or reducing its \
+                           colspan";
                 )
             }
 
@@ -1407,7 +1428,7 @@ impl<'x> CellGridResolver<'_, '_, 'x> {
                 bail!(
                     cell_span,
                     "cell would span an exceedingly large position";
-                    hint: "try reducing the cell's rowspan or colspan"
+                    hint: "try reducing the cell's rowspan or colspan";
                 )
             };
 
@@ -1441,7 +1462,7 @@ impl<'x> CellGridResolver<'_, '_, 'x> {
 
             // Let's resolve the cell so it can determine its own fields
             // based on its final position.
-            let cell = self.resolve_cell(cell, x, y, rowspan, cell_span)?;
+            let cell = self.resolve_cell(cell, x, y, rowspan, cell_kind)?;
 
             if largest_index >= resolved_cells.len() {
                 // Ensure the length of the vector of resolved cells is
@@ -1479,7 +1500,7 @@ impl<'x> CellGridResolver<'_, '_, 'x> {
                 bail!(
                     cell_span,
                     "attempted to place a second cell at column {x}, row {y}";
-                    hint: "try specifying your cells in a different order"
+                    hint: "try specifying your cells in a different order";
                 );
             }
 
@@ -1502,8 +1523,10 @@ impl<'x> CellGridResolver<'_, '_, 'x> {
                     if slot.is_some() {
                         bail!(
                             cell_span,
-                            "cell would span a previously placed cell at column {spanned_x}, row {spanned_y}";
-                            hint: "try specifying your cells in a different order or reducing the cell's rowspan or colspan"
+                            "cell would span a previously placed cell at column \
+                             {spanned_x}, row {spanned_y}";
+                            hint: "try specifying your cells in a different order or \
+                                   reducing the cell's rowspan or colspan";
                         )
                     }
                     *slot = Some(Entry::Merged { parent: resolved_index });
@@ -1538,13 +1561,20 @@ impl<'x> CellGridResolver<'_, '_, 'x> {
                     // and footers without having to loop through them each time.
                     // Cells themselves, unfortunately, still have to.
                     assert!(resolved_cells[*local_auto_index].is_none());
+                    let kind = match row_group.kind {
+                        RowGroupKind::Header => TableCellKind::Header(
+                            NonZeroU32::ONE,
+                            TableHeaderScope::default(),
+                        ),
+                        RowGroupKind::Footer => TableCellKind::Footer,
+                    };
                     resolved_cells[*local_auto_index] =
                         Some(Entry::Cell(self.resolve_cell(
                             T::default(),
                             0,
                             first_available_row,
                             1,
-                            Span::detached(),
+                            Smart::Custom(kind),
                         )?));
 
                     group_start..group_end
@@ -1580,7 +1610,7 @@ impl<'x> CellGridResolver<'_, '_, 'x> {
                         // below.
                         range: group_range.clone(),
 
-                        level: row_group.repeatable_level.get(),
+                        level: row_group.repeatable_level,
 
                         // This can only change at a later iteration, if we
                         // find a conflicting header or footer right away.
@@ -1635,9 +1665,9 @@ impl<'x> CellGridResolver<'_, '_, 'x> {
     ///    can be affected by show rules and grid-wide styling.
     fn fixup_cells<T>(
         &mut self,
-        resolved_cells: Vec<Option<Entry<'x>>>,
+        resolved_cells: Vec<Option<Entry>>,
         columns: usize,
-    ) -> SourceResult<Vec<Entry<'x>>>
+    ) -> SourceResult<Vec<Entry>>
     where
         T: ResolvableCell + Default,
     {
@@ -1662,7 +1692,7 @@ impl<'x> CellGridResolver<'_, '_, 'x> {
                         x,
                         y,
                         1,
-                        Span::detached(),
+                        Smart::Auto,
                     )?))
                 }
             })
@@ -1700,8 +1730,10 @@ impl<'x> CellGridResolver<'_, '_, 'x> {
             if y == row_amount && line.position == LinePosition::After {
                 bail!(
                     line_span,
-                    "cannot place horizontal line at the 'bottom' position of the bottom border (y = {y})";
-                    hint: "set the line's position to 'top' or place it at a smaller 'y' index"
+                    "cannot place horizontal line at the 'bottom' position of the \
+                     bottom border (y = {y})";
+                    hint: "set the line's position to 'top' or place it at a smaller \
+                           'y' index";
                 );
             }
             let line = if line.position == LinePosition::After
@@ -1738,8 +1770,10 @@ impl<'x> CellGridResolver<'_, '_, 'x> {
             if x == columns && line.position == LinePosition::After {
                 bail!(
                     line_span,
-                    "cannot place vertical line at the 'end' position of the end border (x = {columns})";
-                    hint: "set the line's position to 'start' or place it at a smaller 'x' index"
+                    "cannot place vertical line at the 'end' position of the end border \
+                     (x = {columns})";
+                    hint: "set the line's position to 'start' or place it at a smaller \
+                           'x' index";
                 );
             }
             let line = if line.position == LinePosition::After
@@ -1808,11 +1842,11 @@ impl<'x> CellGridResolver<'_, '_, 'x> {
         let mut last_consec_level = 0;
         for header in headers.iter_mut().rev() {
             if header.range.end == consecutive_header_start
-                && header.level >= last_consec_level
+                && header.level.get() >= last_consec_level
             {
                 header.short_lived = true;
             } else {
-                last_consec_level = header.level;
+                last_consec_level = header.level.get();
             }
 
             consecutive_header_start = header.range.start;
@@ -1915,8 +1949,8 @@ impl<'x> CellGridResolver<'_, '_, 'x> {
         x: usize,
         y: usize,
         rowspan: usize,
-        cell_span: Span,
-    ) -> SourceResult<Cell<'x>>
+        kind: Smart<TableCellKind>,
+    ) -> SourceResult<Cell>
     where
         T: ResolvableCell + Default,
     {
@@ -1950,8 +1984,8 @@ impl<'x> CellGridResolver<'_, '_, 'x> {
             self.inset.resolve(self.engine, self.styles, x, y)?,
             self.stroke.resolve(self.engine, self.styles, x, y)?,
             breakable,
-            self.locator.next(&cell_span),
             self.styles,
+            kind,
         ))
     }
 }
@@ -1962,7 +1996,7 @@ impl<'x> CellGridResolver<'_, '_, 'x> {
 /// returned. Otherwise, the new `start..end` range of rows in the row group is
 /// returned.
 fn expand_row_group(
-    resolved_cells: &[Option<Entry<'_>>],
+    resolved_cells: &[Option<Entry>],
     group_range: Option<&Range<usize>>,
     group_kind: RowGroupKind,
     first_available_row: usize,
@@ -1991,7 +2025,7 @@ fn expand_row_group(
             "cell would cause {} to expand to non-empty row {}",
             group_kind.name(),
             first_available_row.saturating_sub(1);
-            hint: "try moving its cells to available rows"
+            hint: "try moving its cells to available rows";
         );
     }
 
@@ -2056,7 +2090,7 @@ fn expand_row_group(
                 bail!(
                     "cell would cause {} to expand to non-empty row {new_y}",
                     group_kind.name();
-                    hint: "try moving its cells to available rows",
+                    hint: "try moving its cells to available rows";
                 )
             }
         } else {
@@ -2088,7 +2122,7 @@ fn check_for_conflicting_cell_row(
     {
         bail!(
             "cell would conflict with header also spanning row {row}";
-            hint: "try moving the cell or the header"
+            hint: "try moving the cell or the header";
         );
     }
 
@@ -2107,7 +2141,7 @@ fn check_for_conflicting_cell_row(
 
         bail!(
             "cell would conflict with footer also spanning row {row}";
-            hint: "try reducing the cell's rowspan or moving the footer"
+            hint: "try reducing the cell's rowspan or moving the footer";
         );
     }
 
@@ -2280,7 +2314,7 @@ fn resolve_cell_position(
 fn find_next_available_position(
     header_rows: &SmallBitSet,
     footer: Option<&(usize, Span, Footer)>,
-    resolved_cells: &[Option<Entry<'_>>],
+    resolved_cells: &[Option<Entry>],
     columns: usize,
     initial_index: usize,
     skip_rows: bool,

@@ -4,7 +4,7 @@ description: |
   similarities between Typst and LaTeX so you can get started quickly.
 ---
 
-# Guide for LaTeX users { # }
+# Guide for LaTeX Users { # }
 This page is a good starting point if you have used LaTeX before and want to try
 out Typst. We will explore the main differences between these two systems from a
 user perspective. Although Typst is not built upon LaTeX and has a different
@@ -76,21 +76,23 @@ Emphasis (usually rendered as italic text) is expressed by enclosing text in
 Here is a list of common markup commands used in LaTeX and their Typst
 equivalents. You can also check out the [full syntax cheat sheet]($syntax).
 
-| Element          | LaTeX                     | Typst                  | See        |
-|:-----------------|:--------------------------|:-----------------------|:-----------|
-| Strong emphasis  | `\textbf{strong}`         | `[*strong*]`           | [`strong`] |
-| Emphasis         | `\emph{emphasis}`         | `[_emphasis_]`         | [`emph`]   |
-| Monospace / code | `\texttt{print(1)}`       | ``[`print(1)`]``       | [`raw`]    |
-| Link             | `\url{https://typst.app}` | `[https://typst.app/]` | [`link`]   |
-| Label            | `\label{intro}`           | `[<intro>]`            | [`label`]  |
-| Reference        | `\ref{intro}`             | `[@intro]`             | [`ref`]    |
-| Citation         | `\cite{humphrey97}`       | `[@humphrey97]`        | [`cite`]   |
-| Bullet list      | `itemize` environment     | `[- List]`             | [`list`]   |
-| Numbered list    | `enumerate` environment   | `[+ List]`             | [`enum`]   |
-| Term list        | `description` environment | `[/ Term: List]`       | [`terms`]  |
-| Figure           | `figure` environment      | `figure` function      | [`figure`] |
-| Table            | `table` environment       | `table` function       | [`table`]  |
-| Equation         | `$x$`, `align` / `equation` environments | `[$x$]`, `[$ x = y $]` | [`equation`]($math.equation) |
+| Element                | LaTeX                     | Typst                  | See        |
+|:-----------------------|:--------------------------|:-----------------------|:-----------|
+| Strong emphasis        | `\textbf{strong}`         | `[*strong*]`           | [`strong`] |
+| Emphasis               | `\emph{emphasis}`         | `[_emphasis_]`         | [`emph`]   |
+| Link                   | `\url{https://typst.app}` | `[https://typst.app/]` | [`link`]   |
+| Label                  | `\label{intro}`           | `[<intro>]`            | [`label`]  |
+| Reference              | `\ref{intro}`             | `[@intro]`             | [`ref`]    |
+| Citation               | `\cite{humphrey97}`       | `[@humphrey97]`        | [`cite`]   |
+| Monospace (typewriter) | `\texttt{mono}` | `text` or `mono` functions | [`text`], [`mono`]($math.mono) |
+| Code                   | `lstlisting` environment  | ``[`print(f"{x}")`]``  | [`raw`]  |
+| Verbatim               | `verbatim` environment    | ``[`#typst-code()`]``  | [`raw`]  |
+| Bullet list            | `itemize` environment     | `[- List]`             | [`list`]   |
+| Numbered list          | `enumerate` environment   | `[+ List]`             | [`enum`]   |
+| Term list              | `description` environment | `[/ Term: List]`       | [`terms`]  |
+| Figure                 | `figure` environment      | `figure` function      | [`figure`] |
+| Table                  | `table` environment       | `table` function       | [`table`]  |
+| Equation               | `$x$`, `align` / `equation` environments | `[$x$]`, `[$ x = y $]` | [`equation`]($math.equation) |
 
 [Lists]($list) do not rely on environments in Typst. Instead, they have
 lightweight syntax like headings. To create an unordered list (`itemize`),
@@ -121,6 +123,18 @@ between items results in a more [widely]($list.tight) spaced list.
 To get a [numbered list]($enum) (`enumerate`) instead, use a `+` instead of the
 hyphen. For a [term list]($terms) (`description`), write `[/ Term: Description]`
 instead.
+
+Note that the [`raw` function]($raw) and syntax (e.g. ``[`raw`]``) only work for
+verbatim (unformatted) text. If you require formatting, you can use the
+[`text` function]($text) with a monospace font instead, like in the example
+below:
+
+```example
+#text(
+  font: "DejaVu Sans Mono",
+  size: 0.8em,
+)[monospace *bold*]
+```
 
 ## How do I use a command? { #commands }
 LaTeX heavily relies on commands (prefixed by backslashes). It uses these
@@ -474,6 +488,7 @@ and their corresponding Typst functions.
 | csquotes                        | Set the [`text`]($text.lang) language and type `["]` or `[']` |
 | caption                         | [`figure`] function                        |
 | enumitem                        | [`list`], [`enum`], [`terms`] functions    |
+| nicefrac                        | [`frac.style`]($math.frac.style) property  |
 
 Although _many_ things are built-in, not everything can be. That's why Typst has
 its own [package ecosystem]($universe) where the community share its creations
@@ -516,7 +531,7 @@ Numbers and single characters are displayed verbatim, while multiple consecutive
 (non-number) characters will be interpreted as Typst variables.
 
 Typst pre-defines a lot of useful variables in math mode. All Greek (`alpha`,
-`beta`, ...) and some Hebrew letters (`alef`, `bet`, ...) are available through
+`beta`, ...) and some Hebrew letters (`aleph`, `beth`, ...) are available through
 their name. Some symbols are additionally available through shorthands, such as
 `<=`, `>=`, and `->`.
 
@@ -612,6 +627,7 @@ The example below
   [first-line-indent]($par.first-line-indent)
 - [sets the font]($text.font) to "New Computer Modern", an OpenType derivative of
   Computer Modern for both text and [code blocks]($raw)
+- decreases the [font weight]($text.weight) in math mode
 - disables paragraph [spacing]($block.spacing)
 - increases [spacing]($block.spacing) around [headings]($heading)
 
@@ -620,6 +636,7 @@ The example below
 #set par(leading: 0.55em, spacing: 0.55em, first-line-indent: 1.8em, justify: true)
 #set text(font: "New Computer Modern")
 #show raw: set text(font: "New Computer Modern Mono")
+#show math.equation: set text(weight: "regular")
 #show heading: set block(above: 1.4em, below: 1em)
 ```
 

@@ -35,7 +35,7 @@ use crate::foundations::{Repr, repr, ty};
 /// | [`float`]       | `{27% * 0.37037}`       | `{10%}`         |
 /// | [`fraction`]    | `{27% * 3fr}`           | `{0.81fr}`      |
 ///
-/// When ratios are displayed in the document, they are rounded to two
+/// When ratios are [displayed]($repr) in the document, they are rounded to two
 /// significant digits for readability.
 #[ty(cast)]
 #[derive(Default, Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash)]
@@ -60,6 +60,11 @@ impl Ratio {
     /// Get the underlying ratio.
     pub const fn get(self) -> f64 {
         (self.0).get()
+    }
+
+    /// Get the underlying ratio.
+    pub const fn scalar(self) -> Scalar {
+        self.0
     }
 
     /// Whether the ratio is zero.

@@ -3,6 +3,7 @@ use std::hash::{Hash, Hasher};
 use std::ops::{Add, AddAssign};
 use std::sync::Arc;
 
+use comemo::Tracked;
 use ecow::{EcoString, eco_format};
 use indexmap::IndexMap;
 use rustc_hash::FxBuildHasher;
@@ -10,9 +11,10 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use typst_syntax::is_ident;
 use typst_utils::ArcExt;
 
-use crate::diag::{Hint, HintedStrResult, StrResult};
+use crate::diag::{At, Hint, HintedStrResult, SourceResult, StrResult};
+use crate::engine::Engine;
 use crate::foundations::{
-    Array, Module, Repr, Str, Value, array, cast, func, repr, scope, ty,
+    Array, Context, Func, Module, Repr, Str, Value, array, cast, func, repr, scope, ty,
 };
 
 /// Create a new [`Dict`] from key-value pairs.
@@ -37,17 +39,21 @@ pub use crate::__dict as dict;
 /// empty parentheses already yield an empty array, you have to use the special
 /// `(:)` syntax to create an empty dictionary.
 ///
-/// A dictionary is conceptually similar to an array, but it is indexed by
+/// A dictionary is conceptually similar to an [array], but it is indexed by
 /// strings instead of integers. You can access and create dictionary entries
 /// with the `.at()` method. If you know the key statically, you can
 /// alternatively use [field access notation]($scripting/#fields) (`.key`) to
-/// access the value. Dictionaries can be added with the `+` operator and
-/// [joined together]($scripting/#blocks). To check whether a key is present in
-/// the dictionary, use the `in` keyword.
+/// access the value. To check whether a key is present in the dictionary, use
+/// the `in` keyword.
 ///
 /// You can iterate over the pairs in a dictionary using a [for
 /// loop]($scripting/#loops). This will iterate in the order the pairs were
-/// inserted / declared.
+/// inserted / declared initially.
+///
+/// Dictionaries can be added with the `+` operator and [joined together]($scripting/#blocks).
+/// They can also be [spread]($arguments/#spreading) into a function call or
+/// another dictionary[^1] with the `..spread` operator. In each case, if a
+/// key appears multiple times, the last value will override the others.
 ///
 /// # Example
 /// ```example
@@ -62,9 +68,13 @@ pub use crate::__dict as dict;
 /// #dict.keys() \
 /// #dict.values() \
 /// #dict.at("born") \
-/// #dict.insert("city", "Berlin ")
+/// #dict.insert("city", "Berlin")
 /// #("name" in dict)
 /// ```
+///
+/// [^1]: When spreading into a dictionary, if all items between the parentheses
+/// are spread, you have to use the special `(:..spread)` syntax. Otherwise, it
+/// will spread into an array.
 #[ty(scope, cast, name = "dictionary")]
 #[derive(Default, Clone, PartialEq)]
 pub struct Dict(Arc<IndexMap<Str, Value, FxBuildHasher>>);
@@ -166,6 +176,7 @@ impl Dict {
     /// Note that this function is only intended for conversion of a
     /// dictionary-like value to a dictionary, not for creation of a dictionary
     /// from individual pairs. Use the dictionary syntax `(key: value)` instead.
+    /// Also see [`array.to-dict`] for converting arrays to dictionaries.
     ///
     /// ```example
     /// #dictionary(sys).at("version")
@@ -207,6 +218,9 @@ impl Dict {
 
     /// Inserts a new pair into the dictionary. If the dictionary already
     /// contains this key, the value is updated.
+    ///
+    /// To insert multiple pairs at once, you can just alternatively another
+    /// dictionary with the `+=` operator.
     #[func]
     pub fn insert(
         &mut self,
@@ -253,6 +267,64 @@ impl Dict {
         self.0
             .iter()
             .map(|(k, v)| Value::Array(array![k.clone(), v.clone()]))
+            .collect()
+    }
+
+    /// Produces a new dictionary with only the pairs from the original one for
+    /// which the given function returns `{true}`.
+    ///
+    /// ```example:"Basic usage"
+    /// #{
+    ///   (a: 0, b: 1, c: 2)
+    ///     .filter(v => v > 0)
+    /// }
+    /// ```
+    ///
+    /// ```example:"Filtering based on the key instead of the value"
+    /// #{
+    ///   (a: 0, b: 1, c: 2)
+    ///     .pairs()
+    ///     .filter(((k, v)) => k != "a")
+    ///     .to-dict()
+    /// }
+    /// ```
+    #[func]
+    pub fn filter(
+        self,
+        engine: &mut Engine,
+        context: Tracked<Context>,
+        /// The function to apply to each value. Must return a boolean.
+        test: Func,
+    ) -> SourceResult<Dict> {
+        let mut run_test = |v: &Value| {
+            test.call(engine, context, [v.clone()])?
+                .cast::<bool>()
+                .at(test.span())
+        };
+        self.into_iter()
+            .filter_map(|(k, v)| run_test(&v).map(|b| b.then_some((k, v))).transpose())
+            .collect()
+    }
+
+    /// Produces a new dictionary where the keys are the same, but the values
+    /// are transformed with the given function.
+    ///
+    /// ```example
+    /// #(a: 0, b: 1, c: 2).map(v => v + 1)
+    /// ```
+    #[func]
+    pub fn map(
+        self,
+        engine: &mut Engine,
+        context: Tracked<Context>,
+        /// The function to apply to each value.
+        mapper: Func,
+    ) -> SourceResult<Dict> {
+        self.into_iter()
+            .map(|(k, v)| {
+                let mapped_value = mapper.call(engine, context, [v])?;
+                Ok((k, mapped_value))
+            })
             .collect()
     }
 }

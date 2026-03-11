@@ -262,14 +262,18 @@ impl FromValue for Value {
 
 impl<T: NativeElement + FromValue> FromValue for Packed<T> {
     fn from_value(mut value: Value) -> HintedStrResult<Self> {
+        let mut span = Span::detached();
         if let Value::Content(content) = value {
             match content.into_packed::<T>() {
                 Ok(packed) => return Ok(packed),
-                Err(content) => value = Value::Content(content),
+                Err(content) => {
+                    span = content.span();
+                    value = Value::Content(content)
+                }
             }
         }
         let val = T::from_value(value)?;
-        Ok(Packed::new(val))
+        Ok(Packed::new(val).spanned(span))
     }
 }
 
@@ -287,7 +291,7 @@ impl<T: FromValue> FromValue<Spanned<Value>> for Spanned<T> {
 }
 
 /// Describes a possible value for a cast.
-#[derive(Debug, Clone, PartialEq, Hash, PartialOrd)]
+#[derive(Debug, Clone, PartialEq, PartialOrd, Hash)]
 pub enum CastInfo {
     /// Any value is okay.
     Any,
@@ -431,7 +435,7 @@ impl<T, const N: usize> Container for SmallVec<[T; N]> {
 }
 
 /// An uninhabitable type.
-#[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
 pub enum Never {}
 
 impl Reflect for Never {

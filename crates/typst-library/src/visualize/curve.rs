@@ -4,7 +4,7 @@ use typst_utils::Numeric;
 
 use crate::diag::{HintedStrResult, HintedString, bail};
 use crate::foundations::{Content, Packed, Smart, cast, elem};
-use crate::layout::{Abs, Axes, Length, Point, Rel, Size};
+use crate::layout::{Abs, Axes, Length, Point, Rect, Rel, Size};
 use crate::visualize::{FillRule, Paint, Stroke};
 
 use super::FixedStroke;
@@ -43,8 +43,8 @@ use super::FixedStroke;
 pub struct CurveElem {
     /// How to fill the curve.
     ///
-    /// When setting a fill, the default stroke disappears. To create a
-    /// rectangle with both fill and stroke, you have to configure both.
+    /// When setting a fill, the default stroke disappears. To create a curve
+    /// with both fill and stroke, you have to configure both.
     pub fill: Option<Paint>,
 
     /// The drawing rule used to fill the curve.
@@ -69,10 +69,10 @@ pub struct CurveElem {
     #[default]
     pub fill_rule: FillRule,
 
-    /// How to [stroke] the curve. This can be:
+    /// How to [stroke] the curve.
     ///
     /// Can be set to `{none}` to disable the stroke or to `{auto}` for a
-    /// stroke of `{1pt}` black if and if only if no fill is given.
+    /// stroke of `{1pt}` black if and only if no fill is given.
     ///
     /// ```example
     /// #let down = curve.line((40pt, 40pt), relative: true)
@@ -368,7 +368,7 @@ pub struct CurveClose {
 }
 
 /// How to close a curve.
-#[derive(Debug, Copy, Clone, Default, Eq, PartialEq, Hash, Cast)]
+#[derive(Debug, Default, Copy, Clone, Eq, PartialEq, Hash, Cast)]
 pub enum CloseMode {
     /// Closes the curve with a smooth segment that takes into account the
     /// control point opposite the start point.
@@ -474,8 +474,8 @@ impl Curve {
         }
     }
 
-    /// Computes the size of the bounding box of this curve.
-    pub fn bbox_size(&self) -> Size {
+    /// Computes the bounding box of this curve.
+    pub fn bbox(&self) -> Rect {
         let mut min = Point::splat(Abs::inf());
         let mut max = Point::splat(-Abs::inf());
 
@@ -509,7 +509,12 @@ impl Curve {
             }
         }
 
-        Size::new(max.x - min.x, max.y - min.y)
+        Rect::new(min, max)
+    }
+
+    /// Computes the size of the bounding box of this curve.
+    pub fn bbox_size(&self) -> Size {
+        self.bbox().size()
     }
 }
 

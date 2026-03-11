@@ -2,8 +2,11 @@ use std::str::FromStr;
 
 use smallvec::SmallVec;
 
-use crate::diag::bail;
-use crate::foundations::{Array, Content, Packed, Smart, Styles, cast, elem, scope};
+use crate::diag::{bail, warning};
+use crate::foundations::{
+    Array, Content, Packed, Reflect, Smart, Styles, cast, elem, scope,
+};
+use crate::introspection::{Locatable, Tagged};
 use crate::layout::{Alignment, Em, HAlignment, Length, VAlignment};
 use crate::model::{ListItemLike, ListLike, Numbering, NumberingPattern};
 
@@ -41,8 +44,8 @@ use crate::model::{ListItemLike, ListLike, Numbering, NumberingPattern};
 /// + Don't forget step two
 /// ```
 ///
-/// You can also use [`enum.item`]($enum.item) to programmatically customize the
-/// number of each item in the enumeration:
+/// You can also use [`enum.item`] to programmatically customize the number of
+/// each item in the enumeration:
 ///
 /// ```example
 /// #enum(
@@ -63,7 +66,7 @@ use crate::model::{ListItemLike, ListLike, Numbering, NumberingPattern};
 /// Enumeration items can contain multiple paragraphs and other block-level
 /// content. All content that is indented more than an item's marker becomes
 /// part of that item.
-#[elem(scope, title = "Numbered List")]
+#[elem(scope, title = "Numbered List", Locatable, Tagged)]
 pub struct EnumElem {
     /// Defines the default [spacing]($enum.spacing) of the enumeration. If it
     /// is `{false}`, the items are spaced apart with
@@ -200,6 +203,19 @@ pub struct EnumElem {
     /// ) [+ #phase]
     /// ```
     #[variadic]
+    #[parse(
+        for item in args.items.iter() {
+            if item.name.is_none() && Array::castable(&item.value.v) {
+                engine.sink.warn(warning!(
+                    item.value.span,
+                    "implicit conversion from array to `enum.item` is deprecated";
+                    hint: "use `enum.item(number)[body]` instead";
+                    hint: "this conversion was never documented and is being phased out";
+                ));
+            }
+        }
+        args.all()?
+    )]
     pub children: Vec<Packed<EnumItem>>,
 
     /// The numbers of parent items.
@@ -216,7 +232,7 @@ impl EnumElem {
 }
 
 /// An enumeration item.
-#[elem(name = "item", title = "Numbered List Item")]
+#[elem(name = "item", title = "Numbered List Item", Tagged)]
 pub struct EnumItem {
     /// The item's number.
     #[positional]

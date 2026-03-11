@@ -12,14 +12,14 @@ use crate::foundations::{
     Styles, Synthesize, cast, elem, scope, select_where,
 };
 use crate::introspection::{
-    Count, Counter, CounterKey, CounterUpdate, Locatable, Location,
+    Count, Counter, CounterKey, CounterUpdate, Locatable, Location, Tagged,
 };
 use crate::layout::{
     AlignElem, Alignment, BlockElem, Em, Length, OuterVAlignment, PlacementScope,
     VAlignment,
 };
 use crate::model::{Numbering, NumberingPattern, Outlinable, Refable, Supplement};
-use crate::text::{Lang, Region, TextElem};
+use crate::text::{Lang, Locale, TextElem};
 use crate::visualize::ImageElem;
 
 /// A figure with an optional caption.
@@ -101,11 +101,44 @@ use crate::visualize::ImageElem;
 ///   caption: [I'm up here],
 /// )
 /// ```
-#[elem(scope, Locatable, Synthesize, Count, ShowSet, Refable, Outlinable)]
+///
+/// # Accessibility
+/// You can use the [`alt`]($figure.alt) parameter to provide an [alternative
+/// description]($guides/accessibility/#textual-representations) of the figure
+/// for screen readers and other Assistive Technology (AT). Refer to [its
+/// documentation]($figure.alt) to learn more.
+///
+/// You can use figures to add alternative descriptions to paths, shapes, or
+/// visualizations that do not have their own `alt` parameter. If your graphic
+/// is purely decorative and does not have a semantic meaning, consider wrapping
+/// it in [`pdf.artifact`] instead, which will hide it from AT when exporting to
+/// PDF.
+///
+/// AT will always read the figure at the point where it appears in the
+/// document, regardless of its [`placement`]($figure.placement). Put its markup
+/// where it would make the most sense in the reading order.
+#[elem(scope, Locatable, Tagged, Synthesize, Count, ShowSet, Refable, Outlinable)]
 pub struct FigureElem {
     /// The content of the figure. Often, an [image].
     #[required]
     pub body: Content,
+
+    /// An alternative description of the figure.
+    ///
+    /// When you add an alternative description, AT will read both it and the
+    /// caption (if any). However, the content of the figure itself will be
+    /// skipped.
+    ///
+    /// When the body of your figure is an [image]($image) with its own `alt`
+    /// text set, this parameter should not be used on the figure element.
+    /// Likewise, do not use this parameter when the figure contains a table,
+    /// code, or other content that is already accessible. In such cases, the
+    /// content of the figure will be read by AT, and adding an alternative
+    /// description would lead to a loss of information.
+    ///
+    /// You can learn how to write good alternative descriptions in the
+    /// [Accessibility Guide]($guides/accessibility/#textual-representations).
+    pub alt: Option<EcoString>,
 
     /// The figure's placement on the page.
     ///
@@ -177,11 +210,10 @@ pub struct FigureElem {
     ///   its content.
     ///
     /// You can set the kind to be an element function or a string. If you set
-    /// it to an element function other than [`{table}`]($table), [`{raw}`](raw)
-    /// or [`{image}`](image), you will need to manually specify the figure's
-    /// supplement.
+    /// it to an element function other than [`table`], [`raw`], or [`image`],
+    /// you will need to manually specify the figure's supplement.
     ///
-    /// ```example
+    /// ```example:"Customizing the figure kind"
     /// #figure(
     ///   circle(radius: 10pt),
     ///   caption: [A curious atom.],
@@ -198,7 +230,7 @@ pub struct FigureElem {
     /// - For [images]($image): `{counter(figure.where(kind: image))}`
     /// - For a custom kind: `{counter(figure.where(kind: kind))}`
     ///
-    /// ```example
+    /// ```example:"Modifying the figure counter for specific kinds"
     /// #figure(
     ///   table(columns: 2, $n$, $1$),
     ///   caption: [The first table.],
@@ -246,7 +278,7 @@ pub struct FigureElem {
     pub supplement: Smart<Option<Supplement>>,
 
     /// How to number the figure. Accepts a
-    /// [numbering pattern or function]($numbering).
+    /// [numbering pattern or function]($numbering) taking a single number.
     #[default(Some(NumberingPattern::from_str("1").unwrap().into()))]
     pub numbering: Option<Numbering>,
 
@@ -269,12 +301,27 @@ pub struct FigureElem {
     /// number or reset the counter.
     #[synthesized]
     pub counter: Option<Counter>,
+
+    /// The locale of this element (used for the alternative description).
+    #[internal]
+    #[synthesized]
+    pub locale: Locale,
 }
 
 #[scope]
 impl FigureElem {
     #[elem]
     type FigureCaption;
+}
+
+impl FigureElem {
+    /// Retrieves the locale separator.
+    pub fn resolve_separator(&self, styles: StyleChain) -> Content {
+        match self.caption.get_ref(styles) {
+            Some(caption) => caption.resolve_separator(styles),
+            None => FigureCaption::local_separator_in(styles),
+        }
+    }
 }
 
 impl Synthesize for Packed<FigureElem> {
@@ -291,7 +338,7 @@ impl Synthesize for Packed<FigureElem> {
         // Determine the figure's kind.
         let kind = elem.kind.get_cloned(styles).unwrap_or_else(|| {
             elem.body
-                .query_first(&Selector::can::<dyn Figurable>())
+                .query_first_naive(&Selector::can::<dyn Figurable>())
                 .map(|elem| FigureKind::Elem(elem.func()))
                 .unwrap_or_else(|| FigureKind::Elem(ImageElem::ELEM))
         });
@@ -321,9 +368,10 @@ impl Synthesize for Packed<FigureElem> {
                 // Resolve the supplement with the first descendant of the kind or
                 // just the body, if none was found.
                 let descendant = match kind {
-                    FigureKind::Elem(func) => {
-                        elem.body.query_first(&Selector::Elem(func, None)).map(Cow::Owned)
-                    }
+                    FigureKind::Elem(func) => elem
+                        .body
+                        .query_first_naive(&Selector::Elem(func, None))
+                        .map(Cow::Owned),
                     FigureKind::Name(_) => None,
                 };
 
@@ -353,6 +401,7 @@ impl Synthesize for Packed<FigureElem> {
             .set(Smart::Custom(supplement.map(Supplement::Content)));
         elem.counter = Some(Some(counter));
         elem.caption.set(caption);
+        elem.locale = Some(Locale::get_in(styles));
 
         Ok(())
     }
@@ -442,7 +491,7 @@ impl Outlinable for Packed<FigureElem> {
 ///   caption: [A rectangle],
 /// )
 /// ```
-#[elem(name = "caption", Synthesize)]
+#[elem(name = "caption", Locatable, Tagged, Synthesize)]
 pub struct FigureCaption {
     /// The caption's position in the figure. Either `{top}` or `{bottom}`.
     ///
@@ -529,7 +578,7 @@ pub struct FigureCaption {
     pub figure_location: Option<Location>,
 }
 
-impl FigureCaption {
+impl Packed<FigureCaption> {
     /// Realizes the textual caption content.
     pub fn realize(
         &self,
@@ -549,41 +598,44 @@ impl FigureCaption {
             &self.counter,
             &self.figure_location,
         ) {
-            let numbers = counter.display_at_loc(engine, *location, styles, numbering)?;
+            let numbers =
+                counter.display_at(engine, *location, styles, numbering, self.span())?;
             if !supplement.is_empty() {
                 supplement += TextElem::packed('\u{a0}');
             }
-            realized = supplement + numbers + self.get_separator(styles) + realized;
+            realized = supplement + numbers + self.resolve_separator(styles) + realized;
         }
 
         Ok(realized)
     }
 
+    /// Retrieves the locale separator.
+    fn resolve_separator(&self, styles: StyleChain) -> Content {
+        self.separator
+            .get_cloned(styles)
+            .unwrap_or_else(|| FigureCaption::local_separator_in(styles))
+    }
+}
+
+impl FigureCaption {
     /// Gets the default separator in the given language and (optionally)
     /// region.
-    fn local_separator(lang: Lang, _: Option<Region>) -> &'static str {
-        match lang {
-            Lang::CHINESE => "\u{2003}",
-            Lang::FRENCH => ".\u{a0}– ",
-            Lang::RUSSIAN => ". ",
-            Lang::ENGLISH | _ => ": ",
-        }
-    }
-
-    fn get_separator(&self, styles: StyleChain) -> Content {
-        self.separator.get_cloned(styles).unwrap_or_else(|| {
-            TextElem::packed(Self::local_separator(
-                styles.get(TextElem::lang),
-                styles.get(TextElem::region),
-            ))
+    fn local_separator_in(styles: StyleChain) -> Content {
+        styles.get_cloned(FigureCaption::separator).unwrap_or_else(|| {
+            TextElem::packed(match styles.get(TextElem::lang) {
+                Lang::CHINESE => "\u{2003}",
+                Lang::FRENCH => ".\u{a0}– ",
+                Lang::RUSSIAN => ". ",
+                Lang::ENGLISH | _ => ": ",
+            })
         })
     }
 }
 
 impl Synthesize for Packed<FigureCaption> {
     fn synthesize(&mut self, _: &mut Engine, styles: StyleChain) -> SourceResult<()> {
-        let elem = self.as_mut();
-        elem.separator.set(Smart::Custom(elem.get_separator(styles)));
+        let separator = self.resolve_separator(styles);
+        self.separator.set(Smart::Custom(separator));
         Ok(())
     }
 }

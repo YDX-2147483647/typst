@@ -9,8 +9,8 @@ use crate::layout::{Abs, Alignment, Angle, HAlignment, Length, Ratio, Rel, VAlig
 ///
 /// # Example
 /// ```example
-/// #rect(inset: 0pt, move(
-///   dx: 6pt, dy: 6pt,
+/// #rect(inset: 0pt, fill: gray, move(
+///   dx: 4pt, dy: 6pt,
 ///   rect(
 ///     inset: 8pt,
 ///     fill: white,
@@ -19,6 +19,12 @@ use crate::layout::{Abs, Alignment, Angle, HAlignment, Length, Ratio, Rel, VAlig
 ///   )
 /// ))
 /// ```
+///
+/// # Accessibility
+/// Moving is transparent to Assistive Technology (AT). Your content will be
+/// read in the order it appears in the source, regardless of any visual
+/// movement. If you need to hide content from AT altogether in PDF export,
+/// consider using [`pdf.artifact`].
 #[elem]
 pub struct MoveElem {
     /// The horizontal displacement of the content.
@@ -53,7 +59,6 @@ pub struct RotateElem {
     /// ```example
     /// #rotate(-1.571rad)[Space!]
     /// ```
-    ///
     #[positional]
     pub angle: Angle,
 
@@ -192,7 +197,6 @@ pub struct SkewElem {
     /// ```example
     /// #skew(ax: 30deg)[Skewed]
     /// ```
-    ///
     #[default(Angle::zero())]
     pub ax: Angle,
 
@@ -201,7 +205,6 @@ pub struct SkewElem {
     /// ```example
     /// #skew(ay: 30deg)[Skewed]
     /// ```
-    ///
     #[default(Angle::zero())]
     pub ay: Angle,
 
@@ -308,6 +311,22 @@ impl Transform {
     /// Whether this is the identity transformation.
     pub fn is_identity(self) -> bool {
         self == Self::identity()
+    }
+
+    /// Whether this transformation only scales along the X and Y axis.
+    pub fn is_only_scale(self) -> bool {
+        self.ky == Ratio::zero()
+            && self.kx == Ratio::zero()
+            && self.tx == Abs::zero()
+            && self.ty == Abs::zero()
+    }
+
+    /// Whether this transformation only translates along the X and Y axis.
+    pub fn is_only_translate(self) -> bool {
+        self.sx == Ratio::one()
+            && self.sy == Ratio::one()
+            && self.ky == Ratio::zero()
+            && self.kx == Ratio::zero()
     }
 
     /// Pre-concatenate another transformation.

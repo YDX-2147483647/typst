@@ -1,4 +1,4 @@
---- repr ---
+--- repr eval ---
 #let t(a, b) = test(repr(a), b.text)
 
 // Literal values.
@@ -35,6 +35,7 @@
 #t(f, `f`)
 #t(rect , `rect`)
 #t(() => none, `(..) => ..`)
+#t(f.with(), `(..) => ..`)
 
 // Types.
 #t(int, `int`)

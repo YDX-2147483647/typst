@@ -41,8 +41,8 @@ use crate::foundations::{Repr, Str, cast, func, repr, scope, ty};
 /// constant decimal values instead (e.g. `{decimal("3.14")}`).
 ///
 /// The precision of a `float` to `decimal` cast can be slightly improved by
-/// rounding the result to 15 digits with [`calc.round`]($calc.round), but there
-/// are still no precision guarantees for that kind of conversion.
+/// rounding the result to 15 digits with [`calc.round`], but there are still no
+/// precision guarantees for that kind of conversion.
 ///
 /// # Operations
 /// Basic arithmetic operations are supported on two decimals and on pairs of
@@ -91,7 +91,7 @@ use crate::foundations::{Repr, Str, cast, func, repr, scope, ty};
 /// to rounding. When those two operations do not surpass the digit limits, they
 /// are fully precise.
 #[ty(scope, cast)]
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Default, Copy, Clone, Eq, PartialEq, Ord, PartialOrd)]
 pub struct Decimal(rust_decimal::Decimal);
 
 impl Decimal {
@@ -333,7 +333,7 @@ fn warn_on_float_literal(engine: &mut Engine, span: Span) -> Option<()> {
             "creating a decimal using imprecise float literal";
             hint: "use a string in the decimal constructor to avoid loss \
                    of precision: `decimal({})`",
-            node.text().repr()
+            node.text().repr();
         ));
     }
     Some(())

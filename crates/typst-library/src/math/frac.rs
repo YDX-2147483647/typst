@@ -1,8 +1,12 @@
 use typst_syntax::Spanned;
 
 use crate::diag::bail;
-use crate::foundations::{Content, Value, elem};
+use crate::foundations::{Cast, Content, Value, elem};
+use crate::layout::Em;
 use crate::math::Mathy;
+
+/// How much padding to add around each side of a fraction.
+pub const FRAC_PADDING: Em = Em::new(0.1);
 
 /// A mathematical fraction.
 ///
@@ -26,6 +30,70 @@ pub struct FracElem {
     /// The fraction's denominator.
     #[required]
     pub denom: Content,
+
+    /// How the fraction should be laid out.
+    ///
+    /// ```example:"Styles"
+    /// $ frac(x, y, style: "vertical") $
+    /// $ frac(x, y, style: "skewed") $
+    /// $ frac(x, y, style: "horizontal") $
+    /// ```
+    ///
+    /// ```example:"Setting the default"
+    /// #set math.frac(style: "skewed")
+    /// $ a / b $
+    /// ```
+    ///
+    /// ```example:"Handling of grouping parentheses"
+    /// // Grouping parentheses are removed.
+    /// #set math.frac(style: "vertical")
+    /// $ (a + b) / b $
+    ///
+    /// // Grouping parentheses are removed.
+    /// #set math.frac(style: "skewed")
+    /// $ (a + b) / b $
+    ///
+    /// // Grouping parentheses are retained.
+    /// #set math.frac(style: "horizontal")
+    /// $ (a + b) / b $
+    /// ```
+    ///
+    /// ```example:"Different styles in inline vs block equations"
+    /// // This changes the style for inline equations only.
+    /// #show math.equation.where(block: false): set math.frac(style: "horizontal")
+    ///
+    /// This $(x-y)/z = 3$ is inline math, and this is block math:
+    /// $ (x-y)/z = 3 $
+    /// ```
+    #[default(FracStyle::Vertical)]
+    pub style: FracStyle,
+
+    /// Whether the numerator was originally surrounded by parentheses
+    /// that were stripped by the parser.
+    #[internal]
+    #[parse(None)]
+    #[default(false)]
+    pub num_deparenthesized: bool,
+
+    /// Whether the denominator was originally surrounded by parentheses
+    /// that were stripped by the parser.
+    #[internal]
+    #[parse(None)]
+    #[default(false)]
+    pub denom_deparenthesized: bool,
+}
+
+/// Fraction style
+#[derive(Debug, Default, Copy, Clone, Eq, PartialEq, Hash, Cast)]
+pub enum FracStyle {
+    /// Stacked numerator and denominator with a bar.
+    #[default]
+    Vertical,
+    /// Numerator and denominator separated by a slash.
+    Skewed,
+    /// Numerator and denominator placed inline and parentheses are not
+    /// absorbed.
+    Horizontal,
 }
 
 /// A binomial expression.

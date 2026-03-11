@@ -21,6 +21,7 @@ pub use self::rules::{html_span_filled, register};
 use ecow::EcoString;
 use typst_library::Category;
 use typst_library::foundations::{Content, Module, Scope};
+use typst_library::introspection::Location;
 use typst_macros::elem;
 
 /// Creates the module with all HTML definitions.
@@ -68,6 +69,26 @@ pub struct HtmlElem {
     /// The body can be arbitrary Typst content.
     #[positional]
     pub body: Option<Content>,
+
+    /// The element's logical parent, if any.
+    #[internal]
+    #[synthesized]
+    pub parent: Location,
+
+    /// A role that should be applied to the top-level styled HTML element, but
+    /// not its descendants. If we ever get set rules that apply to a specific
+    /// element instead of a subtree, they could supplant this. If we need the
+    /// same mechanism for things like `class`, this could potentially also be
+    /// extended to arbitrary attributes. It's minimal for now.
+    ///
+    /// This is ignored for `<p>` elements as it otherwise tends to
+    /// unintentionally attach to paragraphs resulting from grouping of a single
+    /// element instead of attaching to that element. This is a bit of a hack,
+    /// but good enough for now as the `role` property is purely internal and
+    /// we control what it is used for.
+    #[internal]
+    #[ghost]
+    pub role: Option<EcoString>,
 }
 
 impl HtmlElem {
@@ -96,6 +117,12 @@ impl HtmlElem {
         } else {
             self
         }
+    }
+
+    /// Checks whether the given element is "phrasing content" in HTML.
+    fn is_phrasing(elem: &Content) -> bool {
+        elem.to_packed::<HtmlElem>()
+            .is_some_and(|elem| tag::is_phrasing_content(elem.tag))
     }
 }
 

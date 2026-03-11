@@ -9,7 +9,7 @@ mod prepare;
 mod shaping;
 
 pub use self::box_::layout_box;
-pub use self::shaping::create_shape_plan;
+pub use self::shaping::{SharedShapingContext, create_shape_plan, get_font_and_covers};
 
 use comemo::{Track, Tracked, TrackedMut};
 use typst_library::World;
@@ -19,12 +19,12 @@ use typst_library::foundations::{Packed, Smart, StyleChain};
 use typst_library::introspection::{Introspector, Locator, LocatorLink, SplitLocator};
 use typst_library::layout::{Abs, AlignElem, Dir, FixedAlignment, Fragment, Size};
 use typst_library::model::{
-    EnumElem, FirstLineIndent, Linebreaks, ListElem, ParElem, ParLine, ParLineMarker,
-    TermsElem,
+    EnumElem, FirstLineIndent, JustificationLimits, Linebreaks, ListElem, ParElem,
+    ParLine, ParLineMarker, TermsElem,
 };
 use typst_library::routines::{Arenas, Pair, RealizationKind, Routines};
 use typst_library::text::{Costs, Lang, TextElem};
-use typst_utils::{Numeric, SliceExt};
+use typst_utils::{Numeric, Protected, SliceExt};
 
 use self::collect::{Item, Segment, SpanMapper, collect};
 use self::deco::decorate;
@@ -54,7 +54,7 @@ pub fn layout_par(
         elem,
         engine.routines,
         engine.world,
-        engine.introspector,
+        engine.introspector.into_raw(),
         engine.traced,
         TrackedMut::reborrow_mut(&mut engine.sink),
         engine.route.track(),
@@ -83,6 +83,7 @@ fn layout_par_impl(
     expand: bool,
     situation: ParSituation,
 ) -> SourceResult<Fragment> {
+    let introspector = Protected::from_raw(introspector);
     let link = LocatorLink::new(locator);
     let mut locator = Locator::link(&link).split();
     let mut engine = Engine {
@@ -189,11 +190,13 @@ fn configuration(
 
     Config {
         justify,
+        justification_limits: shared.get(ParElem::justification_limits),
         linebreaks: base.linebreaks.unwrap_or_else(|| {
             if justify { Linebreaks::Optimized } else { Linebreaks::Simple }
         }),
         first_line_indent: {
-            let FirstLineIndent { amount, all } = base.first_line_indent;
+            let amount = base.first_line_indent.amount();
+            let all = base.first_line_indent.all();
             if !amount.is_zero()
                 && match situation {
                     // First-line indent for the first paragraph after a list
@@ -244,7 +247,9 @@ fn configuration(
 /// inline layout that isn't a semantic paragraph.
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
 pub enum ParSituation {
-    /// The paragraph is the first thing in the flow.
+    /// The paragraph is the first child in the flow (i.e. in the container or
+    /// page run) or right after a column break. For such paragraphs, we may
+    /// want to avoid applying first line indent (depending on configuration).
     First,
     /// The paragraph follows another paragraph.
     Consecutive,
@@ -264,6 +269,8 @@ struct ConfigBase {
 struct Config {
     /// Whether to justify text.
     justify: bool,
+    /// Settings for justification.
+    justification_limits: JustificationLimits,
     /// How to determine line breaks.
     linebreaks: Linebreaks,
     /// The indent the first line of a paragraph should have.

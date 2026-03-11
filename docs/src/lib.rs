@@ -18,8 +18,8 @@ use std::sync::LazyLock;
 use typst::diag::{StrResult, bail};
 use typst::foundations::Deprecation;
 use typst::foundations::{
-    AutoValue, Binding, Bytes, CastInfo, Func, Module, NoneValue, ParamInfo, Repr, Scope,
-    Smart, Type, Value,
+    AutoValue, Binding, Bytes, CastInfo, Func, Module, NativeParamInfo, NoneValue, Repr,
+    Scope, Smart, Type, Value,
 };
 use typst::layout::{Abs, Margin, PageElem, PagedDocument};
 use typst::text::{Font, FontBook};
@@ -46,13 +46,19 @@ static GROUPS: LazyLock<Vec<GroupData>> = LazyLock::new(|| {
                 .map(|(k, _)| k.clone())
                 .collect();
         }
+        if group.name == "typed" {
+            group.filter = typst_assets::html::ELEMS
+                .iter()
+                .map(|elem| elem.name.into())
+                .collect();
+        }
     }
     groups
 });
 
 static LIBRARY: LazyLock<LazyHash<Library>> = LazyLock::new(|| {
     let mut lib = Library::builder()
-        .with_features([Feature::Html].into_iter().collect())
+        .with_features([Feature::Html, Feature::A11yExtras].into_iter().collect())
         .build();
     let scope = lib.global.scope_mut();
 
@@ -115,9 +121,20 @@ pub trait Resolver {
 /// Create a page from a markdown file.
 #[track_caller]
 fn md_page(resolver: &dyn Resolver, parent: &str, md: &str) -> PageModel {
+    md_page_with_title(resolver, parent, md, None)
+}
+
+/// Create a page from a markdown file.
+#[track_caller]
+fn md_page_with_title(
+    resolver: &dyn Resolver,
+    parent: &str,
+    md: &str,
+    title: Option<&str>,
+) -> PageModel {
     assert!(parent.starts_with('/') && parent.ends_with('/'));
     let html = Html::markdown(resolver, md, Some(0));
-    let title = html.title().expect("chapter lacks a title");
+    let title = title.or(html.title()).expect("chapter lacks a title");
     PageModel {
         route: eco_format!("{parent}{}/", urlify(title)),
         title: title.into(),
@@ -174,9 +191,25 @@ fn guide_pages(resolver: &dyn Resolver) -> PageModel {
     let mut page = md_page(resolver, resolver.base(), load!("guides/welcome.md"));
     let base = format!("{}guides/", resolver.base());
     page.children = vec![
-        md_page(resolver, &base, load!("guides/guide-for-latex-users.md")),
-        md_page(resolver, &base, load!("guides/page-setup.md")),
-        md_page(resolver, &base, load!("guides/tables.md")),
+        md_page_with_title(
+            resolver,
+            &base,
+            load!("guides/guide-for-latex-users.md"),
+            Some("For LaTeX Users"),
+        ),
+        md_page_with_title(
+            resolver,
+            &base,
+            load!("guides/page-setup.md"),
+            Some("Page Setup"),
+        ),
+        md_page_with_title(resolver, &base, load!("guides/tables.md"), Some("Tables")),
+        md_page_with_title(
+            resolver,
+            &base,
+            load!("guides/accessibility.md"),
+            Some("Accessibility"),
+        ),
     ];
     page
 }
@@ -186,6 +219,9 @@ fn changelog_pages(resolver: &dyn Resolver) -> PageModel {
     let mut page = md_page(resolver, resolver.base(), load!("changelog/welcome.md"));
     let base = format!("{}changelog/", resolver.base());
     page.children = vec![
+        md_page(resolver, &base, load!("changelog/0.14.2.md")),
+        md_page(resolver, &base, load!("changelog/0.14.1.md")),
+        md_page(resolver, &base, load!("changelog/0.14.0.md")),
         md_page(resolver, &base, load!("changelog/0.13.1.md")),
         md_page(resolver, &base, load!("changelog/0.13.0.md")),
         md_page(resolver, &base, load!("changelog/0.12.0.md")),
@@ -259,15 +295,14 @@ fn category_page(resolver: &dyn Resolver, category: Category) -> PageModel {
         shorthands = Some(ShorthandsModel { markup, math });
     }
 
-    let mut skip = FxHashSet::default();
-    if category == Category::Math {
-        skip = GROUPS
-            .iter()
-            .filter(|g| g.category == category)
-            .flat_map(|g| &g.filter)
-            .map(|s| s.as_str())
-            .collect();
+    let mut skip: FxHashSet<&str> = GROUPS
+        .iter()
+        .filter(|g| g.category == category)
+        .flat_map(|g| &g.filter)
+        .map(|s| s.as_str())
+        .collect();
 
+    if category == Category::Math {
         // Already documented in the text category.
         skip.insert("text");
     }
@@ -275,6 +310,11 @@ fn category_page(resolver: &dyn Resolver, category: Category) -> PageModel {
     // Tiling would be duplicate otherwise.
     if category == Category::Visualize {
         skip.insert("pattern");
+    }
+
+    // PDF attach would be duplicate otherwise.
+    if category == Category::Pdf {
+        skip.insert("embed");
     }
 
     // Add values and types.
@@ -408,12 +448,24 @@ fn func_model(
     let scope = func.scope().unwrap();
     let docs = func.docs().unwrap();
 
+    let typed_html = func.keywords().contains(&"typed-html");
+
     let mut self_ = false;
-    let mut params = func.params().unwrap();
-    if params.first().is_some_and(|first| first.name == "self") {
-        self_ = true;
-        params = &params[1..];
-    }
+    let params = func
+        .params()
+        .enumerate()
+        .filter_map(|(i, param)| {
+            let param = param.to_native()?;
+            if i == 0 && param.name == "self" {
+                self_ = true;
+                return None;
+            }
+            if typed_html && is_global_html_attr(param.name) {
+                return None;
+            }
+            Some(param_model(resolver, param))
+        })
+        .collect();
 
     let mut returns = vec![];
     let mut strings = vec![];
@@ -427,32 +479,38 @@ fn func_model(
     }
 
     let nesting = if nested { None } else { Some(1) };
-    let (details, example) =
-        if nested { split_details_and_example(docs) } else { (docs, None) };
+    let items =
+        if nested { details_blocks(docs) } else { vec![RawDetailsBlock::Markdown(docs)] };
+
+    let Some(first_md) = items.iter().find_map(|item| {
+        if let RawDetailsBlock::Markdown(md) = item { Some(md) } else { None }
+    }) else {
+        panic!("function lacks any details")
+    };
 
     FuncModel {
         path: path.iter().copied().map(Into::into).collect(),
         name: name.into(),
         title: func.title().unwrap(),
         keywords: func.keywords(),
-        oneliner: oneliner(details),
-        element: func.element().is_some(),
+        oneliner: oneliner(first_md),
+        element: func.to_element().is_some(),
         contextual: func.contextual().unwrap_or(false),
         deprecation_message: deprecation.map(Deprecation::message),
         deprecation_until: deprecation.and_then(Deprecation::until),
-        details: Html::markdown(resolver, details, nesting),
-        example: example.map(|md| Html::markdown(resolver, md, None)),
+        details: items
+            .into_iter()
+            .map(|proto| proto.into_model(resolver, nesting))
+            .collect(),
         self_,
-        params: params.iter().map(|param| param_model(resolver, param)).collect(),
+        params,
         returns,
         scope: scope_models(resolver, name, scope),
     }
 }
 
 /// Produce a parameter's model.
-fn param_model(resolver: &dyn Resolver, info: &ParamInfo) -> ParamModel {
-    let (details, example) = split_details_and_example(info.docs);
-
+fn param_model(resolver: &dyn Resolver, info: &NativeParamInfo) -> ParamModel {
     let mut types = vec![];
     let mut strings = vec![];
     casts(resolver, &mut types, &mut strings, &info.input);
@@ -463,8 +521,10 @@ fn param_model(resolver: &dyn Resolver, info: &ParamInfo) -> ParamModel {
 
     ParamModel {
         name: info.name,
-        details: Html::markdown(resolver, details, None),
-        example: example.map(|md| Html::markdown(resolver, md, None)),
+        details: details_blocks(info.docs)
+            .into_iter()
+            .map(|proto| proto.into_model(resolver, None))
+            .collect(),
         types,
         strings,
         default: info.default.map(|default| {
@@ -479,18 +539,96 @@ fn param_model(resolver: &dyn Resolver, info: &ParamInfo) -> ParamModel {
     }
 }
 
-/// Split up documentation into details and an example.
-fn split_details_and_example(docs: &str) -> (&str, Option<&str>) {
-    let mut details = docs;
-    let mut example = None;
-    if let Some(mut i) = docs.find("```") {
-        while docs[..i].ends_with('`') {
-            i -= 1;
+/// A details block that has not yet been processed.
+enum RawDetailsBlock<'a> {
+    /// Raw Markdown.
+    Markdown(&'a str),
+    /// An example with an optional title.
+    Example { body: &'a str, title: Option<&'a str> },
+}
+
+impl<'a> RawDetailsBlock<'a> {
+    fn into_model(self, resolver: &dyn Resolver, nesting: Option<usize>) -> DetailsBlock {
+        match self {
+            RawDetailsBlock::Markdown(md) => {
+                DetailsBlock::Html(Html::markdown(resolver, md, nesting))
+            }
+            RawDetailsBlock::Example { body, title } => DetailsBlock::Example {
+                body: Html::markdown(resolver, body, None),
+                title: title.map(Into::into),
+            },
         }
-        details = &docs[..i];
-        example = Some(&docs[i..]);
     }
-    (details, example)
+}
+
+/// Split up documentation into Markdown blocks and examples.
+fn details_blocks(docs: &str) -> Vec<RawDetailsBlock<'_>> {
+    let mut i = 0;
+    let mut res = Vec::new();
+
+    while i < docs.len() {
+        match find_fence_start(&docs[i..]) {
+            Some((found, fence_len)) => {
+                let fence_idx = i + found;
+
+                // Find the language tag of the fence, if any.
+                let lang_tag_end = docs[fence_idx + fence_len..]
+                    .find('\n')
+                    .map(|end| fence_idx + fence_len + end)
+                    .unwrap_or(docs.len());
+
+                let tag = &docs[fence_idx + fence_len..lang_tag_end].trim();
+                let title = ExampleArgs::from_tag(tag).title;
+
+                // First, push non-fenced content. It might be all whitespaces
+                // if it's between two consecutive fences. Therefore, we have to
+                // trim it before checking.
+                let content_before_fence = &docs[i..fence_idx];
+                if !content_before_fence.trim().is_empty() {
+                    res.push(RawDetailsBlock::Markdown(content_before_fence));
+                }
+
+                // Then, find the end of the fence.
+                let offset = fence_idx + fence_len;
+                let Some(fence_end) = docs[offset..]
+                    .find(&"`".repeat(fence_len))
+                    .map(|end| offset + end + fence_len)
+                else {
+                    panic!(
+                        "unclosed code fence in docs at position {}: {}",
+                        fence_idx,
+                        &docs[fence_idx..]
+                    );
+                };
+
+                res.push(RawDetailsBlock::Example {
+                    body: &docs[fence_idx..fence_end],
+                    title,
+                });
+                i = fence_end;
+            }
+            None => {
+                // Push the remaining content only if it's non-empty after trimming.
+                let slice = &docs[i..];
+                if !slice.trim().is_empty() {
+                    res.push(RawDetailsBlock::Markdown(slice));
+                }
+                break;
+            }
+        }
+    }
+
+    res
+}
+
+/// Returns the start of a code fence and how many backticks it uses.
+fn find_fence_start(md: &str) -> Option<(usize, usize)> {
+    let start = md.find("```")?;
+    let mut count = 3;
+    while md[start + count..].starts_with('`') {
+        count += 1;
+    }
+    Some((start, count))
 }
 
 /// Process cast information into types and strings.
@@ -533,7 +671,11 @@ fn func_outline(model: &FuncModel, id_base: &str) -> Vec<OutlineItem> {
 
     if id_base.is_empty() {
         outline.push(OutlineItem::from_name("Summary"));
-        outline.extend(model.details.outline());
+        for block in &model.details {
+            if let DetailsBlock::Html(html) = block {
+                outline.extend(html.outline());
+            }
+        }
 
         if !model.params.is_empty() {
             outline.push(OutlineItem {
@@ -620,6 +762,34 @@ fn group_page(
         children: outline_items,
     });
 
+    let global_attributes = if group.name == "typed" {
+        let div = group.module().scope().get("div").unwrap();
+        let func = div.read().clone().cast::<Func>().unwrap();
+        func.params()
+            .filter_map(|param| param.to_native())
+            .filter(|param| is_global_html_attr(param.name))
+            .map(|info| param_model(resolver, info))
+            .collect()
+    } else {
+        vec![]
+    };
+
+    if !global_attributes.is_empty() {
+        let id = "global-attributes";
+        outline.push(OutlineItem {
+            id: id.into(),
+            name: "Global Attributes".into(),
+            children: global_attributes
+                .iter()
+                .map(|param| OutlineItem {
+                    id: eco_format!("{id}-{}", urlify(param.name)),
+                    name: param.name.into(),
+                    children: vec![],
+                })
+                .collect(),
+        });
+    }
+
     let model = PageModel {
         route: eco_format!("{parent}{}/", group.name),
         title: group.title.clone(),
@@ -631,6 +801,7 @@ fn group_page(
             title: group.title.clone(),
             details,
             functions,
+            global_attributes,
         }),
         children: vec![],
     };
@@ -643,6 +814,15 @@ fn group_page(
     };
 
     (model, item)
+}
+
+/// Whether the given `name` is one of a global HTML attribute (shared by all
+/// elements).
+fn is_global_html_attr(name: &str) -> bool {
+    use typst_assets::html as data;
+    data::ATTRS[..data::ATTRS_GLOBAL]
+        .iter()
+        .any(|global| global.name == name)
 }
 
 /// Create a page for a type.
@@ -719,9 +899,12 @@ fn symbols_model(resolver: &dyn Resolver, group: &GroupData) -> SymbolsModel {
             }
         };
 
-        for (variant, c, deprecation_message) in symbol.variants() {
+        for (variant, value, deprecation_message) in symbol.variants() {
+            let value_char = value.parse::<char>().ok();
             let shorthand = |list: &[(&'static str, char)]| {
-                list.iter().copied().find(|&(_, x)| x == c).map(|(s, _)| s)
+                value_char.and_then(|c| {
+                    list.iter().copied().find(|&(_, x)| x == c).map(|(s, _)| s)
+                })
             };
 
             let name = complete(variant);
@@ -730,9 +913,13 @@ fn symbols_model(resolver: &dyn Resolver, group: &GroupData) -> SymbolsModel {
                 name,
                 markup_shorthand: shorthand(typst::syntax::ast::Shorthand::LIST),
                 math_shorthand: shorthand(typst::syntax::ast::MathShorthand::LIST),
-                math_class: typst_utils::default_math_class(c).map(math_class_name),
-                codepoint: c as _,
-                accent: typst::math::Accent::combine(c).is_some(),
+                // Matches `typst_layout::math::GlyphFragment::new`
+                math_class: value.chars().next().and_then(|c| {
+                    typst_utils::default_math_class(c).map(math_class_name)
+                }),
+                value: value.into(),
+                // Matches casting `Symbol` to `Accent`
+                accent: typst::math::Accent::combining(value).is_some(),
                 alternates: symbol
                     .variants()
                     .filter(|(other, _, _)| other != &variant)
@@ -817,6 +1004,7 @@ const TYPE_ORDER: &[&str] = &[
     "datetime",
     "duration",
     "str",
+    "path",
     "bytes",
     "regex",
     "label",
@@ -907,5 +1095,38 @@ mod tests {
         fn base(&self) -> &str {
             "/"
         }
+    }
+
+    #[test]
+    fn test_parsing_details_blocks() {
+        let docs = r#"
+A brief description of the parameter.
+
+```example
+A basic example.
+```
+
+Further descriptions.
+
+```example
+An _advanced_ example.
+```
+
+```example
+Immediately followed by another example.
+There should be no additional markdown block between them.
+
+Empty lines after the final example should also be dropped.
+```
+
+"#;
+        let blocks = details_blocks(docs);
+
+        assert_eq!(blocks.len(), 5);
+        matches!(blocks[0], RawDetailsBlock::Markdown { .. });
+        matches!(blocks[1], RawDetailsBlock::Example { .. });
+        matches!(blocks[2], RawDetailsBlock::Markdown { .. });
+        matches!(blocks[3], RawDetailsBlock::Example { .. });
+        matches!(blocks[4], RawDetailsBlock::Example { .. });
     }
 }

@@ -20,6 +20,7 @@ use crate::foundations::{
     Bytes, Content, Derived, OneOrMultiple, Packed, PlainText, ShowSet, Smart,
     StyleChain, Styles, Synthesize, Target, TargetElem, cast, elem, scope,
 };
+use crate::introspection::{Locatable, Tagged};
 use crate::layout::{Em, HAlignment};
 use crate::loading::{DataSource, Load};
 use crate::model::{Figurable, ParElem};
@@ -31,6 +32,12 @@ use crate::visualize::Color;
 ///
 /// Displays the text verbatim and in a monospace font. This is typically used
 /// to embed computer code into your document.
+///
+/// Note that text given to this element cannot contain arbitrary formatting,
+/// such as `[*strong*]` or `[_emphasis_]`, as it is displayed verbatim. If
+/// you'd like to display any kind of content with a monospace font, instead of
+/// using [`raw`], you should change its font to a monospace font using the
+/// [`text`]($text) function.
 ///
 /// # Example
 /// ````example
@@ -68,16 +75,60 @@ use crate::visualize::Color;
 /// Within raw blocks, everything (except for the language tag, if applicable)
 /// is rendered as is, in particular, there are no escape sequences.
 ///
-/// The language tag is an identifier that directly follows the opening
-/// backticks only if there are three or more backticks. If your text starts
-/// with something that looks like an identifier, but no syntax highlighting is
-/// needed, start the text with a single space (which will be trimmed) or use
-/// the single backtick syntax. If your text should start or end with a
-/// backtick, put a space before or after it (it will be trimmed).
+/// The language tag ends at the first whitespace or backtick. If your text
+/// starts with something that looks like an identifier, but no syntax
+/// highlighting is needed, start the text with a single space (which will be
+/// trimmed) or use the single backtick syntax. If your text should start or end
+/// with a backtick, put a space before or after it (it will be trimmed).
+///
+/// If no syntax highlighting is available by default for your specified
+/// language tag (or if you want to override the built-in definition), you may
+/// provide a custom syntax specification file to the
+/// [`syntaxes`]($raw.syntaxes) field.
+///
+/// # Styling
+/// By default, the `raw` element uses the `DejaVu Sans Mono` font (included
+/// with Typst), with a smaller font size of `{0.8em}` (that is, 80% of
+/// the global font size). This is because monospace fonts tend to be visually
+/// larger than non-monospace fonts.
+///
+/// You can customize these properties with show-set rules:
+///
+/// ````example
+/// // Switch to Cascadia Code for both
+/// // inline and block raw.
+/// #show raw: set text(font: "Cascadia Code")
+///
+/// // Reset raw blocks to the same size as normal text,
+/// // but keep inline raw at the reduced size.
+/// #show raw.where(block: true): set text(1em / 0.8)
+///
+/// Now using the `Cascadia Code` font for raw text.
+/// Here's some Python code. It looks larger now:
+///
+/// ```py
+/// def python():
+///   return 5 + 5
+/// ```
+/// ````
+///
+/// In addition, you can customize the syntax highlighting colors by setting
+/// a custom theme through the [`theme`]($raw.theme) field.
+///
+/// For complete customization of the appearance of a raw block, a show rule
+/// on [`raw.line`]($raw.line) could be helpful, such as to add line numbers.
+///
+/// Note that, in raw text, typesetting features like
+/// [hyphenation]($text.hyphenate), [overhang]($text.overhang),
+/// [CJK-Latin spacing]($text.cjk-latin-spacing) (and
+/// [justification]($par.justify) for [raw blocks]($raw.block)) will be
+/// disabled by default.
 #[elem(
     scope,
     title = "Raw Text / Code",
     Synthesize,
+    Locatable,
+    Tagged,
     ShowSet,
     LocalName,
     Figurable,
@@ -89,7 +140,7 @@ pub struct RawElem {
     /// You can also use raw blocks creatively to create custom syntaxes for
     /// your automations.
     ///
-    /// ````example
+    /// ````example:"Implementing a DSL using raw and show rules"
     /// // Parse numbers in raw blocks with the
     /// // `mydsl` tag and sum them up.
     /// #show raw.where(lang: "mydsl"): it => {
@@ -185,8 +236,7 @@ pub struct RawElem {
     ///
     /// You can pass any of the following values:
     ///
-    /// - A path string to load a syntax file from the given path. For more
-    ///   details about paths, see the [Paths section]($syntax/#paths).
+    /// - A path string or [`path`] to load a syntax file from.
     /// - Raw bytes from which the syntax should be decoded.
     /// - An array where each item is one of the above.
     ///
@@ -215,8 +265,7 @@ pub struct RawElem {
     ///
     /// - `{none}`: Disables syntax highlighting.
     /// - `{auto}`: Highlights with Typst's default theme.
-    /// - A path string to load a theme file from the given path. For more
-    ///   details about paths, see the [Paths section]($syntax/#paths).
+    /// - A path string or [`path`] to load a theme file from.
     /// - Raw bytes from which the theme should be decoded.
     ///
     /// Applying a theme only affects the color of specifically highlighted
@@ -473,10 +522,6 @@ impl PlainText for Packed<RawElem> {
 
 /// The content of the raw text.
 #[derive(Debug, Clone, Hash)]
-#[allow(
-    clippy::derived_hash_with_manual_eq,
-    reason = "https://github.com/typst/typst/pull/6560#issuecomment-3045393640"
-)]
 pub enum RawContent {
     /// From a string.
     Text(EcoString),
@@ -628,7 +673,7 @@ fn format_theme_error(error: syntect::LoadingError) -> LoadError {
 /// It allows you to access various properties of the line, such as the line
 /// number, the raw non-highlighted text, the highlighted text, and whether it
 /// is the first or last line of the raw block.
-#[elem(name = "line", title = "Raw Text / Code Line", PlainText)]
+#[elem(name = "line", title = "Raw Text / Code Line", Tagged, PlainText)]
 pub struct RawLine {
     /// The line number of the raw line inside of the raw block, starts at 1.
     #[required]
@@ -653,7 +698,7 @@ impl PlainText for Packed<RawLine> {
     }
 }
 
-/// Wrapper struct for the state required to highlight typst code.
+/// Wrapper struct for the state required to highlight Typst code.
 struct ThemedHighlighter<'a> {
     /// The code being highlighted.
     code: &'a str,
@@ -857,20 +902,17 @@ fn align_tabs(text: &str, tab_size: usize) -> EcoString {
     let mut column = 0;
 
     for grapheme in text.graphemes(true) {
-        match grapheme {
-            "\t" => {
-                let required = tab_size - column % divisor;
-                res.push_str(&replacement[..required]);
-                column += required;
-            }
-            "\n" => {
-                res.push_str(grapheme);
-                column = 0;
-            }
-            _ => {
-                res.push_str(grapheme);
-                column += 1;
-            }
+        let c = grapheme.parse::<char>();
+        if c == Ok('\t') {
+            let required = tab_size - column % divisor;
+            res.push_str(&replacement[..required]);
+            column += required;
+        } else if c.is_ok_and(typst_syntax::is_newline) || grapheme == "\r\n" {
+            res.push_str(grapheme);
+            column = 0;
+        } else {
+            res.push_str(grapheme);
+            column += 1;
         }
     }
 
@@ -890,15 +932,15 @@ pub static RAW_THEME: LazyLock<synt::Theme> = LazyLock::new(|| synt::Theme {
     author: Some("The Typst Project Developers".into()),
     settings: synt::ThemeSettings::default(),
     scopes: vec![
-        item("comment", Some("#8a8a8a"), None),
+        item("comment", Some("#74747c"), None),
         item("constant.character.escape", Some("#1d6c76"), None),
         item("markup.bold", None, Some(synt::FontStyle::BOLD)),
         item("markup.italic", None, Some(synt::FontStyle::ITALIC)),
         item("markup.underline", None, Some(synt::FontStyle::UNDERLINE)),
-        item("markup.raw", Some("#818181"), None),
+        item("markup.raw", Some("#6b6b6f"), None),
         item("string.other.math.typst", None, None),
-        item("punctuation.definition.math", Some("#298e0d"), None),
-        item("keyword.operator.math", Some("#1d6c76"), None),
+        item("punctuation.definition.math", Some("#198810"), None),
+        item("keyword.operator.math, punctuation.math.typst", Some("#1d6c76"), None),
         item("markup.heading, entity.name.section", None, Some(synt::FontStyle::BOLD)),
         item(
             "markup.heading.typst",
@@ -908,16 +950,18 @@ pub static RAW_THEME: LazyLock<synt::Theme> = LazyLock::new(|| synt::Theme {
         item("punctuation.definition.list", Some("#8b41b1"), None),
         item("markup.list.term", None, Some(synt::FontStyle::BOLD)),
         item("entity.name.label, markup.other.reference", Some("#1d6c76"), None),
-        item("keyword, constant.language, variable.language", Some("#d73a49"), None),
-        item("storage.type, storage.modifier", Some("#d73a49"), None),
+        item("keyword, constant.language, variable.language", Some("#d73948"), None),
+        item("storage.type, storage.modifier", Some("#d73948"), None),
         item("constant", Some("#b60157"), None),
-        item("string", Some("#298e0d"), None),
+        item("string", Some("#198810"), None),
         item("entity.name, variable.function, support", Some("#4b69c6"), None),
         item("support.macro", Some("#16718d"), None),
         item("meta.annotation", Some("#301414"), None),
         item("entity.other, meta.interpolation", Some("#8b41b1"), None),
         item("meta.diff.range", Some("#8b41b1"), None),
-        item("markup.inserted, meta.diff.header.to-file", Some("#298e0d"), None),
-        item("markup.deleted, meta.diff.header.from-file", Some("#d73a49"), None),
+        item("markup.inserted, meta.diff.header.to-file", Some("#198810"), None),
+        item("markup.deleted, meta.diff.header.from-file", Some("#d73948"), None),
+        item("meta.mapping.key.json string.quoted.double.json", Some("#4b69c6"), None),
+        item("meta.mapping.value.json string.quoted.double.json", Some("#198810"), None),
     ],
 });

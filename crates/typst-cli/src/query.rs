@@ -1,35 +1,40 @@
+use std::fmt::Write;
+
 use comemo::Track;
 use ecow::{EcoString, eco_format};
-use serde::Serialize;
 use typst::World;
-use typst::diag::{HintedStrResult, StrResult, Warned, bail};
+use typst::diag::{HintedStrResult, SourceDiagnostic, StrResult, Warned, bail};
 use typst::engine::Sink;
-use typst::foundations::{Content, IntoValue, LocatableSelector, Scope};
+use typst::foundations::{Content, Context, IntoValue, LocatableSelector, Repr, Scope};
 use typst::introspection::Introspector;
 use typst::layout::PagedDocument;
 use typst::syntax::{Span, SyntaxMode};
 use typst_eval::eval_string;
 use typst_html::HtmlDocument;
 
-use crate::args::{QueryCommand, SerializationFormat, Target};
+use crate::args::{Input, QueryCommand, Target};
 use crate::compile::print_diagnostics;
 use crate::set_failed;
 use crate::world::SystemWorld;
 
 /// Execute a query command.
-pub fn query(command: &QueryCommand) -> HintedStrResult<()> {
-    let mut world = SystemWorld::new(&command.input, &command.world, &command.process)?;
+pub fn query(command: &'static QueryCommand) -> HintedStrResult<()> {
+    let mut world =
+        SystemWorld::new(Some(&command.input), &command.world, &command.process)?;
 
     // Reset everything and ensure that the main file is present.
     world.reset();
     world.source(world.main()).map_err(|err| err.to_string())?;
 
-    let Warned { output, warnings } = match command.target {
+    let Warned { output, mut warnings } = match command.target {
         Target::Paged => typst::compile::<PagedDocument>(&world)
             .map(|output| output.map(|document| document.introspector)),
         Target::Html => typst::compile::<HtmlDocument>(&world)
             .map(|output| output.map(|document| document.introspector)),
     };
+
+    // Add deprecation warning.
+    warnings.push(deprecation_warning(command));
 
     match output {
         // Retrieve and print query results.
@@ -68,6 +73,8 @@ fn retrieve(
         world.track(),
         // TODO: propagate warnings
         Sink::new().track_mut(),
+        Introspector::default().track(),
+        Context::none().track(),
         &command.selector,
         Span::detached(),
         SyntaxMode::Code,
@@ -104,28 +111,44 @@ fn format(elements: Vec<Content>, command: &QueryCommand) -> StrResult<String> {
         let Some(value) = mapped.first() else {
             bail!("no such field found for element");
         };
-        serialize(value, command.format, command.pretty)
+        crate::serialize(value, command.format, command.pretty)
     } else {
-        serialize(&mapped, command.format, command.pretty)
+        crate::serialize(&mapped, command.format, command.pretty)
     }
 }
 
-/// Serialize data to the output format.
-fn serialize(
-    data: &impl Serialize,
-    format: SerializationFormat,
-    pretty: bool,
-) -> StrResult<String> {
-    match format {
-        SerializationFormat::Json => {
-            if pretty {
-                serde_json::to_string_pretty(data).map_err(|e| eco_format!("{e}"))
+/// Format the deprecation warning with the specific invocation of `typst eval` needed to replace `typst query`.
+fn deprecation_warning(command: &QueryCommand) -> SourceDiagnostic {
+    let query = {
+        let mut buf = format!("query({})", command.selector);
+        let access = |field: &str| {
+            if typst::syntax::is_ident(field) {
+                eco_format!(".{field}")
             } else {
-                serde_json::to_string(data).map_err(|e| eco_format!("{e}"))
+                eco_format!(".at({})", field.repr())
             }
+        };
+        match (command.one, &command.field) {
+            (false, None) => {}
+            (false, Some(field)) => {
+                write!(buf, ".map(it => it{})", access(field)).unwrap()
+            }
+            (true, None) => write!(buf, ".first()").unwrap(),
+            (true, Some(field)) => write!(buf, ".first(){}", access(field)).unwrap(),
         }
-        SerializationFormat::Yaml => {
-            serde_yaml::to_string(data).map_err(|e| eco_format!("{e}"))
+        shell_escape::escape(buf.into())
+    };
+
+    let eval_command = match &command.input {
+        Input::Path(path) => {
+            eco_format!("typst eval {query} --in {}", path.display())
         }
-    }
+        Input::Stdin => eco_format!("typst eval {query}"),
+    };
+
+    SourceDiagnostic::warning(
+        Span::detached(),
+        "the `typst query` subcommand is deprecated",
+    )
+    .with_hint(eco_format!("use `{}` instead", eval_command))
 }
