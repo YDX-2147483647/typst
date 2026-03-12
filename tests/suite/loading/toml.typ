@@ -66,12 +66,12 @@
 // https://toml.io/en/v1.0.0#integer
 
 #import "edge-case.typ": large-integer
-// Error: 7-55 failed to parse TOML (number too large to fit in target type at 1:7)
+// Error: 7-55 failed to parse TOML (u64 value was too large at 1:7)
 #toml(bytes("key = " + large-integer.i64-max-plus-one))
 
 --- toml-decode-integer-too-small eval ---
 #import "edge-case.typ": large-integer
-// Error: 7-56 failed to parse TOML (number too small to fit in target type at 1:7)
+// Error: 7-56 failed to parse TOML (invalid type: integer `-9223372036854775809` as i128, expected any valid TOML value at 1:7)
 #toml(bytes("key = " + large-integer.i64-min-minus-one))
 
 --- toml-encode-any eval ---
