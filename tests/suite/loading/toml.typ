@@ -41,7 +41,7 @@
 #test(data-from-path, data)
 
 --- toml-invalid eval ---
-// Error: "/assets/data/bad.toml" 1:16-2:1 failed to parse TOML (expected `.`, `=`)
+// Error: "assets/data/bad.toml" 1:16 failed to parse TOML (key with no value, expected `=`)
 #toml("/assets/data/bad.toml")
 
 --- toml-decode-deprecated eval ---
@@ -88,5 +88,5 @@
 #toml.encode(3)
 
 --- toml-decode-non-table eval ---
-// Error: 7-17 failed to parse TOML (expected `.`, `=` at 1:2)
+// Error: 7-17 failed to parse TOML (key with no value, expected `=` at 1:2)
 #toml(bytes("3"))
