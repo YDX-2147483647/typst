@@ -129,4 +129,3 @@ fn format_toml_error(error: ::toml::de::Error) -> LoadError {
     let pos = error.span().map(ReportPos::from).unwrap_or_default();
     LoadError::new(pos, "failed to parse TOML", error.message())
 }
-
